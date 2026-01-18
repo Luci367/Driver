@@ -139,6 +139,22 @@ typedef volatile uint32_t reg32_wo_t;
 #define CAN_MH_LOCK_OFFSET (0x028U)
 
 /*---------------------------------------------------------------------------*/
+/* Lock Register Unlock Sequence Constants (Section 1.4.4.2.2)               */
+/*---------------------------------------------------------------------------*/
+
+/** @brief MH Lock Unlock Key Word 1 */
+#define CAN_MH_LOCK_ULK_KEY1 (0x00001234U)
+
+/** @brief MH Lock Unlock Key Word 2 */
+#define CAN_MH_LOCK_ULK_KEY2 (0x00004321U)
+
+/** @brief MH Lock Test Mode Key Word 1 */
+#define CAN_MH_LOCK_TMK_KEY1 (0x67890000U)
+
+/** @brief MH Lock Test Mode Key Word 2 */
+#define CAN_MH_LOCK_TMK_KEY2 (0x98760000U)
+
+/*---------------------------------------------------------------------------*/
 /* TX FIFO Queue Registers (Section 1.4.4.1)                                 */
 /*---------------------------------------------------------------------------*/
 
@@ -905,8 +921,8 @@ typedef union {
     uint32_t rc : 5;    /**< [8:4]   RC[4:0] - Rolling Counter */
     uint32_t in : 3;    /**< [11:9]  IN[2:0] - Instance Number */
     uint32_t fqn : 4;   /**< [15:12] FQN[3:0] - RX FIFO Queue Number */
-    uint32_t crc : 9;   /**< [24:16] CRC[8:0] */
-    uint32_t rsvd0 : 2; /**< [26:25] Reserved (set to 0) */
+    uint32_t crc : 7;   /**< [22:16] CRC[6:0] - 7-bit CRC (per reference) */
+    uint32_t rsvd0 : 4; /**< [26:23] Reserved (set to 0) */
     uint32_t irq : 1;   /**< [27]    IRQ - Interrupt request */
     uint32_t next : 1;  /**< [28]    NEXT - More descriptors (MH writes) */
     uint32_t rsvd1 : 1; /**< [29]    Reserved (set to 0) */
