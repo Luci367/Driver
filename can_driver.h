@@ -470,6 +470,87 @@ struct can_rx_msg_header {
 } __attribute__((packed, aligned(4)));
 
 /*
+ * Protocol Controller (PRT) Register Offsets
+ * Reference: X_CAN User Manual v3.9, Section 1.5.4.1
+ */
+#define CAN_PRT_BASE_OFFSET		0xA00U
+#define CAN_PRT_ENDN_OFFSET		0xA00U
+#define CAN_PRT_PREL_OFFSET		0xA04U
+#define CAN_PRT_STAT_OFFSET		0xA08U
+#define CAN_PRT_EVNT_OFFSET		0xA20U
+#define CAN_PRT_LOCK_OFFSET		0xA40U
+#define CAN_PRT_CTRL_OFFSET		0xA44U
+#define CAN_PRT_FIMC_OFFSET		0xA48U
+#define CAN_PRT_TEST_OFFSET		0xA4CU
+#define CAN_PRT_MODE_OFFSET		0xA60U
+#define CAN_PRT_NBTP_OFFSET		0xA64U
+#define CAN_PRT_DBTP_OFFSET		0xA68U
+#define CAN_PRT_XBTP_OFFSET		0xA6CU
+#define CAN_PRT_PCFG_OFFSET		0xA70U
+
+/*
+ * Configuration Structures
+ */
+struct can_bit_timing {
+	uint8_t		brp;
+	uint16_t	tseg1;
+	uint8_t		tseg2;
+	uint8_t		sjw;
+	uint8_t		tdco;
+	uint8_t		padding[1];
+};
+
+struct can_queue_config {
+	uint32_t	start_addr;
+	uint32_t	dc_start_addr;
+	uint16_t	size;
+	uint16_t	dc_size;
+	bool		enabled;
+	bool		continuous;
+	uint8_t		padding[2];
+};
+
+struct can_config {
+	uint32_t		base_addr;
+	uint32_t		lmem_base_addr;
+	uint32_t		lmem_size;
+
+	enum can_protocol	protocol;
+	enum can_mode		mode;
+
+	struct can_bit_timing	nominal_timing;
+	struct can_bit_timing	data_timing;
+	struct can_bit_timing	xl_timing;
+
+	struct can_queue_config	tx_fifo_queues[CAN_TX_FIFO_QUEUE_COUNT];
+	struct can_queue_config	rx_fifo_queues[CAN_RX_FIFO_QUEUE_COUNT];
+
+	uint32_t		txpq_start_addr;
+	uint8_t			txpq_slot_count;
+	uint8_t			padding1[3];
+
+	uint32_t		rx_filter_base_addr;
+	uint32_t		tx_desc_base_addr;
+	uint8_t			rx_filter_count;
+	uint8_t			instance_num;
+	uint8_t			padding2[2];
+
+	uint32_t		func_int_enable;
+	uint32_t		err_int_enable;
+	uint32_t		safety_int_enable;
+
+	bool			loopback_enable;
+	bool			listen_only;
+	bool			tx_desc_crc_enable;
+	bool			rx_desc_crc_enable;
+};
+
+/*
+ * Function prototypes - Core API
+ */
+enum can_error can_init(const struct can_config *config);
+
+/*
  * Register access macros
  */
 #define CAN_REG_READ(addr) \
