@@ -935,3 +935,368 @@ enum can_error can_tx_priority_is_busy(uint32_t base_addr, uint8_t slot_id,
 
 	return CAN_ERROR_NONE;
 }
+
+/*
+ * RX API Implementation
+ */
+
+/* RX status register definitions */
+#define CAN_RX_FQ_STS0_BUSY_POS		0U
+#define CAN_RX_FQ_STS0_BUSY_MASK	0x000000FFU
+#define CAN_RX_FQ_STS0_STOP_POS		8U
+#define CAN_RX_FQ_STS0_STOP_MASK	0x0000FF00U
+#define CAN_RX_FQ_STS1_NEW_MASK		0x000000FFU
+
+static inline uint32_t can_smem_read32(uint32_t addr)
+{
+	return *((volatile uint32_t *)(uintptr_t)addr);
+}
+
+static void can_smem_copy_from(uint8_t *dst, uint32_t src_addr, uint32_t len)
+{
+	uint32_t i, word, offset = 0U;
+
+	for (i = 0U; i < (len / 4U); i++) {
+		word = can_smem_read32(src_addr + offset);
+		dst[offset + 0U] = (uint8_t)(word & 0xFFU);
+		dst[offset + 1U] = (uint8_t)((word >> 8U) & 0xFFU);
+		dst[offset + 2U] = (uint8_t)((word >> 16U) & 0xFFU);
+		dst[offset + 3U] = (uint8_t)((word >> 24U) & 0xFFU);
+		offset += 4U;
+	}
+
+	if ((len % 4U) != 0U) {
+		word = can_smem_read32(src_addr + offset);
+		for (i = 0U; i < (len % 4U); i++)
+			dst[offset + i] = (uint8_t)((word >> (i * 8U)) & 0xFFU);
+	}
+}
+
+static uint32_t can_fd_dlc_to_len(uint8_t dlc)
+{
+	static const uint8_t dlc_to_len[16] = {
+		0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U,
+		8U, 12U, 16U, 20U, 24U, 32U, 48U, 64U
+	};
+	return (uint32_t)dlc_to_len[dlc & 0x0FU];
+}
+
+/*
+ * can_rx_fifo_setup - Setup RX FIFO queue
+ * @base_addr: CAN controller base address
+ * @fifo_id: RX FIFO queue index (0-7)
+ * @desc_phys_addr: Physical address of descriptor linked list
+ * @max_desc: Maximum number of descriptors
+ * @dc_size: Data container size in 32-byte units
+ * @continuous: True for continuous mode
+ *
+ * Return: enum can_error code
+ */
+enum can_error can_rx_fifo_setup(uint32_t base_addr, uint8_t fifo_id,
+				 uint32_t desc_phys_addr, uint16_t max_desc,
+				 uint32_t dc_size, bool continuous)
+{
+	uint32_t reg_val, size_val;
+
+	if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT)
+		return CAN_ERROR_INVALID_PARAM;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_STS0_OFFSET);
+	if (reg_val & (1U << fifo_id))
+		return CAN_ERROR_QUEUE_FULL;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET);
+	if (reg_val & (1U << fifo_id)) {
+		reg_val &= ~(1U << fifo_id);
+		CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET, reg_val);
+	}
+
+	CAN_WRITE_REG(base_addr, rx_fq_start_add_offset[fifo_id], desc_phys_addr);
+
+	size_val = ((uint32_t)max_desc & CAN_RX_FQ_SIZE_MAX_DESC_MASK);
+	size_val |= ((dc_size << CAN_RX_FQ_SIZE_DC_SIZE_POS) &
+		     CAN_RX_FQ_SIZE_DC_SIZE_MASK);
+	CAN_WRITE_REG(base_addr, rx_fq_size_offset[fifo_id], size_val);
+
+	if (continuous) {
+		CAN_WRITE_REG(base_addr, rx_fq_rd_add_pt_offset[fifo_id],
+			      desc_phys_addr & 0xFFFFFFFCU);
+	}
+
+	return CAN_ERROR_NONE;
+}
+
+/*
+ * can_rx_fifo_setup_continuous - Setup RX FIFO for continuous mode
+ */
+enum can_error can_rx_fifo_setup_continuous(uint32_t base_addr, uint8_t fifo_id,
+					    uint32_t desc_phys_addr,
+					    uint16_t max_desc,
+					    uint32_t dc_start_addr,
+					    uint32_t dc_size)
+{
+	enum can_error status;
+
+	status = can_rx_fifo_setup(base_addr, fifo_id, desc_phys_addr,
+				   max_desc, dc_size, true);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	CAN_WRITE_REG(base_addr, rx_fq_dc_start_add_offset[fifo_id],
+		      dc_start_addr);
+	CAN_WRITE_REG(base_addr, rx_fq_rd_add_pt_offset[fifo_id],
+		      dc_start_addr & 0xFFFFFFFCU);
+
+	return CAN_ERROR_NONE;
+}
+
+/*
+ * can_rx_read - Read a message from RX FIFO queue
+ * @base_addr: CAN controller base address
+ * @fifo_id: RX FIFO queue index (0-7)
+ * @msg: Pointer to message structure to fill
+ * @timeout_us: Timeout in microseconds (0 = non-blocking)
+ *
+ * Return: enum can_error code
+ */
+enum can_error can_rx_read(uint32_t base_addr, uint8_t fifo_id,
+			   struct can_msg *msg, uint32_t timeout_us)
+{
+	uint32_t reg_val, desc_addr, data_addr, timeout_count, data_len;
+	struct can_rx_descriptor desc;
+	struct can_rx_msg_header hdr;
+	bool is_fdf, is_xlf;
+	uint8_t dlc;
+
+	if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT || !msg)
+		return CAN_ERROR_INVALID_PARAM;
+
+	timeout_count = (timeout_us == 0U) ? 1U : timeout_us;
+
+	/* Poll for new messages */
+	while (timeout_count > 0U) {
+		reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_STS1_OFFSET);
+		if (reg_val & (1U << fifo_id))
+			break;
+
+		if (timeout_us == 0U)
+			return CAN_ERROR_QUEUE_EMPTY;
+		timeout_count--;
+	}
+
+	if (timeout_count == 0U)
+		return CAN_ERROR_TIMEOUT;
+
+	/* Read descriptor */
+	desc_addr = CAN_READ_REG(base_addr, rx_fq_start_add_offset[fifo_id]);
+
+	desc.elem0.word = can_smem_read32(desc_addr + 0U);
+	desc.rx_ap = can_smem_read32(desc_addr + 4U);
+	desc.ts0 = can_smem_read32(desc_addr + 8U);
+	desc.ts1 = can_smem_read32(desc_addr + 12U);
+
+	if (!desc.elem0.bits.valid)
+		return CAN_ERROR_QUEUE_EMPTY;
+
+	data_addr = desc.rx_ap;
+
+	/* Read message header */
+	hdr.r0.word = can_smem_read32(data_addr + 0U);
+	hdr.r1.word = can_smem_read32(data_addr + 4U);
+	hdr.r2 = can_smem_read32(data_addr + 8U);
+
+	memset(msg, 0, sizeof(*msg));
+
+	/* Parse frame format */
+	is_fdf = (hdr.r0.bits.fdf != 0U);
+	is_xlf = (hdr.r0.bits.xlf != 0U);
+	msg->fd = is_fdf && !is_xlf;
+	msg->xl = is_xlf;
+	msg->extended = (hdr.r0.bits.xtd != 0U);
+
+	/* Parse ID */
+	if (msg->xl) {
+		msg->id = hdr.r0.bits.base_id;
+		msg->vcid = (uint8_t)((hdr.r0.bits.ext_id >> 8U) & 0xFFU);
+		msg->sdt = (uint8_t)(hdr.r0.bits.ext_id & 0xFFU);
+	} else if (msg->extended) {
+		msg->id = ((uint32_t)hdr.r0.bits.base_id << 18U) |
+			  hdr.r0.bits.ext_id;
+	} else {
+		msg->id = hdr.r0.bits.base_id;
+	}
+
+	/* Parse DLC */
+	if (msg->xl) {
+		uint32_t dlc_xl = ((uint32_t)hdr.r1.bits.dlc_xl_h << 4U) |
+				  hdr.r1.bits.dlc;
+		data_len = dlc_xl;
+		if (data_len > CAN_XL_MAX_DLC)
+			data_len = CAN_XL_MAX_DLC;
+	} else if (msg->fd) {
+		dlc = (uint8_t)hdr.r1.bits.dlc;
+		data_len = can_fd_dlc_to_len(dlc);
+	} else {
+		dlc = (uint8_t)hdr.r1.bits.dlc;
+		data_len = (dlc > 8U) ? 8U : dlc;
+	}
+	msg->len = data_len;
+
+	/* Other flags */
+	msg->brs = (hdr.r1.bits.brs != 0U);
+	msg->esi = (hdr.r1.bits.esi != 0U);
+	msg->rtr = (hdr.r1.bits.rtr != 0U) && !msg->fd && !msg->xl;
+	msg->timestamp = ((uint64_t)desc.ts1 << 32U) | desc.ts0;
+	msg->fifo_id = fifo_id;
+	msg->status = (enum can_desc_status)desc.elem0.bits.sts;
+
+	/* Copy data payload */
+	if (data_len > 0U && !msg->rtr) {
+		uint32_t hdr_size = msg->xl ? 12U : 8U;
+		can_smem_copy_from(msg->data, data_addr + hdr_size, data_len);
+	}
+
+	/* Mark descriptor as available */
+	desc.elem0.bits.valid = 0U;
+	can_smem_write32(desc_addr + 0U, desc.elem0.word);
+
+	return CAN_ERROR_NONE;
+}
+
+/*
+ * can_rx_has_message - Check if RX FIFO has new messages
+ */
+enum can_error can_rx_has_message(uint32_t base_addr, uint8_t fifo_id,
+				  bool *has_msg)
+{
+	uint32_t reg_val;
+
+	if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT || !has_msg)
+		return CAN_ERROR_INVALID_PARAM;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_STS1_OFFSET);
+	*has_msg = !!(reg_val & (1U << fifo_id));
+
+	return CAN_ERROR_NONE;
+}
+
+/*
+ * can_rx_restart - Restart RX FIFO queue
+ */
+void can_rx_restart(uint32_t base_addr, uint8_t fifo_id)
+{
+	uint32_t reg_val;
+
+	if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT)
+		return;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_STS_OFFSET);
+	if (!(reg_val & CAN_MH_STS_ENABLE_MASK))
+		return;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET);
+	if (!(reg_val & (1U << fifo_id))) {
+		reg_val |= (1U << fifo_id);
+		CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET, reg_val);
+	}
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL0_OFFSET);
+	reg_val |= (1U << fifo_id);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL0_OFFSET, reg_val);
+}
+
+/*
+ * can_rx_abort - Abort RX FIFO queue
+ */
+enum can_error can_rx_abort(uint32_t base_addr, uint8_t fifo_id)
+{
+	uint32_t reg_val;
+	uint32_t timeout = CAN_POLL_TIMEOUT_COUNT;
+
+	if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT)
+		return CAN_ERROR_INVALID_PARAM;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL1_OFFSET);
+	reg_val |= (1U << fifo_id);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL1_OFFSET, reg_val);
+
+	while (timeout > 0U) {
+		reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_STS0_OFFSET);
+		if (!(reg_val & (1U << fifo_id)) &&
+		    !(reg_val & (0x100U << fifo_id)))
+			break;
+		timeout--;
+	}
+
+	if (timeout == 0U)
+		return CAN_ERROR_TIMEOUT;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL1_OFFSET);
+	reg_val &= ~(1U << fifo_id);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL1_OFFSET, reg_val);
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET);
+	reg_val &= ~(1U << fifo_id);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET, reg_val);
+
+	return CAN_ERROR_NONE;
+}
+
+/*
+ * can_rx_fifo_is_busy - Check if RX FIFO is busy
+ */
+enum can_error can_rx_fifo_is_busy(uint32_t base_addr, uint8_t fifo_id,
+				   bool *is_busy)
+{
+	uint32_t reg_val;
+
+	if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT || !is_busy)
+		return CAN_ERROR_INVALID_PARAM;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_STS0_OFFSET);
+	*is_busy = !!(reg_val & (1U << fifo_id));
+
+	return CAN_ERROR_NONE;
+}
+
+/*
+ * can_rx_get_fill_level - Get RX FIFO fill level
+ */
+enum can_error can_rx_get_fill_level(uint32_t base_addr, uint8_t fifo_id,
+				     uint32_t *fill_level)
+{
+	uint32_t start_addr, queue_size, desc_addr, count = 0U, elem0;
+	uint32_t i;
+
+	if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT || !fill_level)
+		return CAN_ERROR_INVALID_PARAM;
+
+	start_addr = CAN_READ_REG(base_addr, rx_fq_start_add_offset[fifo_id]);
+	queue_size = CAN_READ_REG(base_addr, rx_fq_size_offset[fifo_id]) &
+		     CAN_RX_FQ_SIZE_MAX_DESC_MASK;
+
+	for (i = 0U; i < queue_size; i++) {
+		desc_addr = start_addr + (i * CAN_RX_DESCRIPTOR_SIZE);
+		elem0 = can_smem_read32(desc_addr);
+		if (elem0 & 0x80000000U)
+			count++;
+	}
+
+	*fill_level = count;
+	return CAN_ERROR_NONE;
+}
+
+/*
+ * can_rx_update_read_ptr - Update RX read pointer (continuous mode)
+ */
+enum can_error can_rx_update_read_ptr(uint32_t base_addr, uint8_t fifo_id,
+				      uint32_t new_addr)
+{
+	if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT)
+		return CAN_ERROR_INVALID_PARAM;
+
+	CAN_WRITE_REG(base_addr, rx_fq_rd_add_pt_offset[fifo_id],
+		      new_addr & 0xFFFFFFFCU);
+
+	return CAN_ERROR_NONE;
+}

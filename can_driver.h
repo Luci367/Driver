@@ -604,6 +604,50 @@ enum can_error can_tx_priority_is_busy(uint32_t base_addr, uint8_t slot_id,
 				       bool *is_busy);
 
 /*
+ * CAN Message Structure for API
+ */
+struct can_msg {
+	uint32_t		id;
+	uint8_t			data[2048];
+	uint32_t		len;
+	uint64_t		timestamp;
+	uint8_t			fifo_id;
+	bool			extended;
+	bool			fd;
+	bool			xl;
+	bool			brs;
+	bool			esi;
+	bool			rtr;
+	uint8_t			vcid;
+	uint8_t			sdt;
+	enum can_desc_status	status;
+};
+
+/*
+ * Function prototypes - RX API
+ */
+enum can_error can_rx_fifo_setup(uint32_t base_addr, uint8_t fifo_id,
+				 uint32_t desc_phys_addr, uint16_t max_desc,
+				 uint32_t dc_size, bool continuous);
+enum can_error can_rx_fifo_setup_continuous(uint32_t base_addr, uint8_t fifo_id,
+					    uint32_t desc_phys_addr,
+					    uint16_t max_desc,
+					    uint32_t dc_start_addr,
+					    uint32_t dc_size);
+enum can_error can_rx_read(uint32_t base_addr, uint8_t fifo_id,
+			   struct can_msg *msg, uint32_t timeout_us);
+enum can_error can_rx_has_message(uint32_t base_addr, uint8_t fifo_id,
+				  bool *has_msg);
+void can_rx_restart(uint32_t base_addr, uint8_t fifo_id);
+enum can_error can_rx_abort(uint32_t base_addr, uint8_t fifo_id);
+enum can_error can_rx_fifo_is_busy(uint32_t base_addr, uint8_t fifo_id,
+				   bool *is_busy);
+enum can_error can_rx_get_fill_level(uint32_t base_addr, uint8_t fifo_id,
+				     uint32_t *fill_level);
+enum can_error can_rx_update_read_ptr(uint32_t base_addr, uint8_t fifo_id,
+				      uint32_t new_addr);
+
+/*
  * Register access macros
  */
 #define CAN_REG_READ(addr) \
