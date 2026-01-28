@@ -800,6 +800,72 @@ enum can_error can_get_irq_pending(uint32_t base_addr, uint32_t *func_pending,
 				   uint32_t *safety_pending);
 
 /*
+ * CAN Statistics Structure
+ */
+struct can_stats {
+	uint8_t			tx_error_count;
+	uint8_t			rx_error_count;
+	enum can_bus_state	bus_state;
+	uint32_t		tx_success_count;
+	uint32_t		rx_success_count;
+	uint32_t		tx_error_frames;
+	uint32_t		rx_error_frames;
+	uint32_t		arb_lost_count;
+	uint32_t		bus_off_count;
+	uint32_t		overrun_count;
+	bool			error_warning;
+	bool			error_passive;
+	bool			bus_off;
+	uint8_t			last_error_code;
+};
+
+/*
+ * Function prototypes - Statistics and Utility API
+ */
+enum can_error can_get_stats(uint32_t base_addr, struct can_stats *stats);
+enum can_error can_get_bus_state(uint32_t base_addr, enum can_bus_state *state);
+enum can_error can_clear_stats(uint32_t base_addr);
+
+/*
+ * DLC conversion helpers
+ */
+static const uint8_t can_dlc_to_len[16] = {
+	0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U,
+	8U, 12U, 16U, 20U, 24U, 32U, 48U, 64U
+};
+
+#define CAN_DLC_TO_LEN(dlc)	(can_dlc_to_len[(dlc) & 0x0FU])
+
+static inline uint8_t can_len_to_dlc(uint16_t len)
+{
+	if (len <= 8U)
+		return (uint8_t)len;
+	if (len <= 12U)
+		return 9U;
+	if (len <= 16U)
+		return 10U;
+	if (len <= 20U)
+		return 11U;
+	if (len <= 24U)
+		return 12U;
+	if (len <= 32U)
+		return 13U;
+	if (len <= 48U)
+		return 14U;
+	return 15U;
+}
+
+static inline void can_reg32_write(uint32_t addr, uint32_t value)
+{
+	*((volatile uint32_t *)(uintptr_t)addr) = value;
+}
+
+static inline uint32_t can_reg32_read(uint32_t addr)
+{
+	return *((volatile uint32_t *)(uintptr_t)addr);
+}
+
+/*
  * Register access macros
  */
 #define CAN_REG_READ(addr) \

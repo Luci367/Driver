@@ -1794,3 +1794,96 @@ enum can_error can_get_irq_pending(uint32_t base_addr, uint32_t *func_pending,
 
 	return CAN_ERROR_NONE;
 }
+
+/*
+ * Statistics and Utility Functions
+ */
+
+/* PRT event register definitions */
+#define CAN_PRT_EVNT_E_WARN_MASK	0x00000001U
+#define CAN_PRT_EVNT_E_PASSIVE_MASK	0x00000002U
+#define CAN_PRT_EVNT_BUS_OFF_MASK	0x00000004U
+
+/* PRT stat register definitions */
+#define CAN_PRT_STAT_TEC_POS		24U
+#define CAN_PRT_STAT_TEC_MASK		0xFF000000U
+#define CAN_PRT_STAT_REC_POS		16U
+#define CAN_PRT_STAT_REC_MASK		0x007F0000U
+#define CAN_PRT_STAT_LEC_POS		8U
+#define CAN_PRT_STAT_LEC_MASK		0x00000700U
+
+static struct can_stats g_can_stats;
+
+enum can_error can_get_stats(uint32_t base_addr, struct can_stats *stats)
+{
+	uint32_t prt_stat, prt_evnt, tx_stats, rx_stats;
+
+	if (!stats)
+		return CAN_ERROR_INVALID_PARAM;
+
+	prt_stat = CAN_READ_REG(base_addr, CAN_PRT_STAT_OFFSET);
+	prt_evnt = CAN_READ_REG(base_addr, CAN_PRT_EVNT_OFFSET);
+	tx_stats = CAN_READ_REG(base_addr, CAN_MH_TX_STATISTICS_OFFSET);
+	rx_stats = CAN_READ_REG(base_addr, CAN_MH_RX_STATISTICS_OFFSET);
+
+	memcpy(stats, &g_can_stats, sizeof(struct can_stats));
+
+	stats->tx_error_count =
+		(uint8_t)((prt_stat & CAN_PRT_STAT_TEC_MASK) >>
+			  CAN_PRT_STAT_TEC_POS);
+	stats->rx_error_count =
+		(uint8_t)((prt_stat & CAN_PRT_STAT_REC_MASK) >>
+			  CAN_PRT_STAT_REC_POS);
+	stats->last_error_code =
+		(uint8_t)((prt_stat & CAN_PRT_STAT_LEC_MASK) >>
+			  CAN_PRT_STAT_LEC_POS);
+
+	stats->error_warning = !!(prt_evnt & CAN_PRT_EVNT_E_WARN_MASK);
+	stats->error_passive = !!(prt_evnt & CAN_PRT_EVNT_E_PASSIVE_MASK);
+	stats->bus_off = !!(prt_evnt & CAN_PRT_EVNT_BUS_OFF_MASK);
+
+	if (stats->bus_off)
+		stats->bus_state = CAN_BUS_STATE_BUS_OFF;
+	else if (stats->error_passive)
+		stats->bus_state = CAN_BUS_STATE_PASSIVE;
+	else if (stats->error_warning)
+		stats->bus_state = CAN_BUS_STATE_WARNING;
+	else
+		stats->bus_state = CAN_BUS_STATE_ACTIVE;
+
+	stats->tx_success_count = tx_stats;
+	stats->rx_success_count = rx_stats;
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_get_bus_state(uint32_t base_addr, enum can_bus_state *state)
+{
+	uint32_t prt_evnt;
+
+	if (!state)
+		return CAN_ERROR_INVALID_PARAM;
+
+	prt_evnt = CAN_READ_REG(base_addr, CAN_PRT_EVNT_OFFSET);
+
+	if (prt_evnt & CAN_PRT_EVNT_BUS_OFF_MASK)
+		*state = CAN_BUS_STATE_BUS_OFF;
+	else if (prt_evnt & CAN_PRT_EVNT_E_PASSIVE_MASK)
+		*state = CAN_BUS_STATE_PASSIVE;
+	else if (prt_evnt & CAN_PRT_EVNT_E_WARN_MASK)
+		*state = CAN_BUS_STATE_WARNING;
+	else
+		*state = CAN_BUS_STATE_ACTIVE;
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_clear_stats(uint32_t base_addr)
+{
+	memset(&g_can_stats, 0, sizeof(struct can_stats));
+
+	CAN_WRITE_REG(base_addr, CAN_MH_TX_STATISTICS_OFFSET, 0U);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_STATISTICS_OFFSET, 0U);
+
+	return CAN_ERROR_NONE;
+}
