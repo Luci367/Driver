@@ -489,6 +489,61 @@ struct can_rx_msg_header {
 #define CAN_PRT_PCFG_OFFSET		0xA70U
 
 /*
+ * PRT Register Bit Field Definitions
+ */
+
+/* NBTP Register (0xA64) - Nominal Bit Timing */
+#define CAN_NBTP_NSJW_POS		0U
+#define CAN_NBTP_NSJW_MASK		0x0000007FU
+#define CAN_NBTP_NTSEG2_POS		8U
+#define CAN_NBTP_NTSEG2_MASK		0x00007F00U
+#define CAN_NBTP_NTSEG1_POS		16U
+#define CAN_NBTP_NTSEG1_MASK		0x01FF0000U
+#define CAN_NBTP_BRP_POS		25U
+#define CAN_NBTP_BRP_MASK		0x3E000000U
+
+/* DBTP Register (0xA68) - CAN FD Data Phase Bit Timing */
+#define CAN_DBTP_DSJW_POS		0U
+#define CAN_DBTP_DSJW_MASK		0x0000007FU
+#define CAN_DBTP_DTSEG2_POS		8U
+#define CAN_DBTP_DTSEG2_MASK		0x00007F00U
+#define CAN_DBTP_DTSEG1_POS		16U
+#define CAN_DBTP_DTSEG1_MASK		0x00FF0000U
+#define CAN_DBTP_DTDCO_POS		24U
+#define CAN_DBTP_DTDCO_MASK		0xFF000000U
+
+/* XBTP Register (0xA6C) - CAN XL Data Phase Bit Timing */
+#define CAN_XBTP_XSJW_POS		0U
+#define CAN_XBTP_XSJW_MASK		0x0000007FU
+#define CAN_XBTP_XTSEG2_POS		8U
+#define CAN_XBTP_XTSEG2_MASK		0x00007F00U
+#define CAN_XBTP_XTSEG1_POS		16U
+#define CAN_XBTP_XTSEG1_MASK		0x00FF0000U
+#define CAN_XBTP_XTDCO_POS		24U
+#define CAN_XBTP_XTDCO_MASK		0xFF000000U
+
+/*
+ * Helper macros for bit timing configuration
+ */
+#define CAN_BUILD_NBTP(brp, tseg1, tseg2, sjw) \
+	((((uint32_t)(brp) << CAN_NBTP_BRP_POS) & CAN_NBTP_BRP_MASK) | \
+	 (((uint32_t)(tseg1) << CAN_NBTP_NTSEG1_POS) & CAN_NBTP_NTSEG1_MASK) | \
+	 (((uint32_t)(tseg2) << CAN_NBTP_NTSEG2_POS) & CAN_NBTP_NTSEG2_MASK) | \
+	 (((uint32_t)(sjw) << CAN_NBTP_NSJW_POS) & CAN_NBTP_NSJW_MASK))
+
+#define CAN_BUILD_DBTP(dtdco, dtseg1, dtseg2, dsjw) \
+	((((uint32_t)(dtdco) << CAN_DBTP_DTDCO_POS) & CAN_DBTP_DTDCO_MASK) | \
+	 (((uint32_t)(dtseg1) << CAN_DBTP_DTSEG1_POS) & CAN_DBTP_DTSEG1_MASK) | \
+	 (((uint32_t)(dtseg2) << CAN_DBTP_DTSEG2_POS) & CAN_DBTP_DTSEG2_MASK) | \
+	 (((uint32_t)(dsjw) << CAN_DBTP_DSJW_POS) & CAN_DBTP_DSJW_MASK))
+
+#define CAN_BUILD_XBTP(xtdco, xtseg1, xtseg2, xsjw) \
+	((((uint32_t)(xtdco) << CAN_XBTP_XTDCO_POS) & CAN_XBTP_XTDCO_MASK) | \
+	 (((uint32_t)(xtseg1) << CAN_XBTP_XTSEG1_POS) & CAN_XBTP_XTSEG1_MASK) | \
+	 (((uint32_t)(xtseg2) << CAN_XBTP_XTSEG2_POS) & CAN_XBTP_XTSEG2_MASK) | \
+	 (((uint32_t)(xsjw) << CAN_XBTP_XSJW_POS) & CAN_XBTP_XSJW_MASK))
+
+/*
  * Configuration Structures
  */
 struct can_bit_timing {
@@ -646,6 +701,26 @@ enum can_error can_rx_get_fill_level(uint32_t base_addr, uint8_t fifo_id,
 				     uint32_t *fill_level);
 enum can_error can_rx_update_read_ptr(uint32_t base_addr, uint8_t fifo_id,
 				      uint32_t new_addr);
+
+/*
+ * Function prototypes - PRT (Protocol Controller) API
+ */
+enum can_error can_deinit(uint32_t base_addr);
+enum can_error can_start(uint32_t base_addr);
+enum can_error can_stop(uint32_t base_addr);
+enum can_error can_set_bit_timing(uint32_t base_addr,
+				  const struct can_bit_timing *nominal,
+				  const struct can_bit_timing *data,
+				  const struct can_bit_timing *xl);
+enum can_error can_set_loopback(uint32_t base_addr, bool enable);
+enum can_error can_set_listen_only(uint32_t base_addr, bool enable);
+enum can_error can_software_reset(uint32_t base_addr);
+enum can_error can_get_version(uint32_t base_addr, uint32_t *mh_version,
+			       uint32_t *prt_version);
+enum can_error can_tx_fifo_start(uint32_t base_addr, uint8_t queue_idx,
+				 const struct can_queue_config *config);
+enum can_error can_rx_fifo_start(uint32_t base_addr, uint8_t queue_idx,
+				 const struct can_queue_config *config);
 
 /*
  * Register access macros

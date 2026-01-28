@@ -112,6 +112,22 @@
 #define CAN_PRT_CTRL_STRT_MASK		0x00000010U
 #define CAN_PRT_CTRL_SRES_POS		8U
 #define CAN_PRT_CTRL_SRES_MASK		0x00000100U
+#define CAN_PRT_CTRL_TEST_POS		12U
+#define CAN_PRT_CTRL_TEST_MASK		0x00001000U
+
+/* PRT MODE Register (0xA60) */
+#define CAN_PRT_MODE_FDOE_POS		0U
+#define CAN_PRT_MODE_FDOE_MASK		0x00000001U
+#define CAN_PRT_MODE_XLOE_POS		1U
+#define CAN_PRT_MODE_XLOE_MASK		0x00000002U
+#define CAN_PRT_MODE_TDCE_POS		2U
+#define CAN_PRT_MODE_TDCE_MASK		0x00000004U
+#define CAN_PRT_MODE_MON_POS		6U
+#define CAN_PRT_MODE_MON_MASK		0x00000040U
+
+/* PRT TEST Register (0xA4C) */
+#define CAN_PRT_TEST_LBCK_POS		0U
+#define CAN_PRT_TEST_LBCK_MASK		0x00000001U
 
 /*
  * Register offset arrays
@@ -173,11 +189,17 @@ static enum can_error can_configure_tx_fifo_queues(uint32_t base,
 						   const struct can_config *cfg);
 static enum can_error can_configure_rx_fifo_queues(uint32_t base,
 						   const struct can_config *cfg);
+static enum can_error can_configure_prt_mode(uint32_t base,
+					     const struct can_config *cfg);
+static enum can_error can_configure_bit_timing(uint32_t base,
+					       const struct can_config *cfg);
 static enum can_error can_start_mh(uint32_t base, uint32_t timeout);
+static enum can_error can_start_prt(uint32_t base, uint32_t timeout);
 static enum can_error can_start_rx_fifo_queues(uint32_t base,
 					       const struct can_config *cfg);
 static enum can_error can_start_tx_fifo_queues(uint32_t base,
 					       const struct can_config *cfg);
+static enum can_error can_prt_unlock(uint32_t base);
 
 /*
  * can_init - Initialize CAN controller
@@ -232,17 +254,32 @@ enum can_error can_init(const struct can_config *cfg)
 	if (status != CAN_ERROR_NONE)
 		return status;
 
-	/* Step 8: Start MH */
+	/* Step 8: Configure PRT Mode */
+	status = can_configure_prt_mode(base, cfg);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	/* Step 9: Configure Bit Timing */
+	status = can_configure_bit_timing(base, cfg);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	/* Step 10: Start MH */
 	status = can_start_mh(base, CAN_POLL_TIMEOUT_COUNT);
 	if (status != CAN_ERROR_NONE)
 		return status;
 
-	/* Step 9: Start RX FIFO Queues */
+	/* Step 11: Start RX FIFO Queues */
 	status = can_start_rx_fifo_queues(base, cfg);
 	if (status != CAN_ERROR_NONE)
 		return status;
 
-	/* Step 10: Start TX FIFO Queues */
+	/* Step 12: Start PRT */
+	status = can_start_prt(base, CAN_POLL_TIMEOUT_COUNT);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	/* Step 13: Start TX FIFO Queues */
 	status = can_start_tx_fifo_queues(base, cfg);
 	if (status != CAN_ERROR_NONE)
 		return status;
@@ -460,6 +497,321 @@ static enum can_error can_start_tx_fifo_queues(uint32_t base,
 
 	CAN_WRITE_REG(base, CAN_MH_TX_FQ_CTRL2_OFFSET, enable_mask);
 	CAN_WRITE_REG(base, CAN_MH_TX_FQ_CTRL0_OFFSET, start_mask);
+
+	return CAN_ERROR_NONE;
+}
+
+static enum can_error can_prt_unlock(uint32_t base)
+{
+	CAN_WRITE_REG(base, CAN_PRT_LOCK_OFFSET, CAN_PRT_UNLOCK_KEY1);
+	CAN_WRITE_REG(base, CAN_PRT_LOCK_OFFSET, CAN_PRT_UNLOCK_KEY2);
+	return CAN_ERROR_NONE;
+}
+
+static enum can_error can_configure_prt_mode(uint32_t base,
+					     const struct can_config *cfg)
+{
+	uint32_t mode_val = 0U;
+
+	switch (cfg->protocol) {
+	case CAN_PROTOCOL_CC:
+		break;
+	case CAN_PROTOCOL_FD:
+		mode_val |= CAN_PRT_MODE_FDOE_MASK;
+		mode_val |= CAN_PRT_MODE_TDCE_MASK;
+		break;
+	case CAN_PROTOCOL_XL:
+		mode_val |= CAN_PRT_MODE_FDOE_MASK;
+		mode_val |= CAN_PRT_MODE_XLOE_MASK;
+		mode_val |= CAN_PRT_MODE_TDCE_MASK;
+		break;
+	default:
+		return CAN_ERROR_INVALID_PARAM;
+	}
+
+	if (cfg->listen_only)
+		mode_val |= CAN_PRT_MODE_MON_MASK;
+
+	CAN_WRITE_REG(base, CAN_PRT_MODE_OFFSET, mode_val);
+
+	if (cfg->loopback_enable) {
+		can_prt_unlock(base);
+		CAN_WRITE_REG(base, CAN_PRT_CTRL_OFFSET, CAN_PRT_CTRL_TEST_MASK);
+		CAN_WRITE_REG(base, CAN_PRT_TEST_OFFSET, CAN_PRT_TEST_LBCK_MASK);
+	}
+
+	return CAN_ERROR_NONE;
+}
+
+static enum can_error can_configure_bit_timing(uint32_t base,
+					       const struct can_config *cfg)
+{
+	uint32_t nbtp_val, dbtp_val, xbtp_val;
+
+	nbtp_val = CAN_BUILD_NBTP(cfg->nominal_timing.brp,
+				  cfg->nominal_timing.tseg1,
+				  cfg->nominal_timing.tseg2,
+				  cfg->nominal_timing.sjw);
+	CAN_WRITE_REG(base, CAN_PRT_NBTP_OFFSET, nbtp_val);
+
+	if (cfg->protocol == CAN_PROTOCOL_FD ||
+	    cfg->protocol == CAN_PROTOCOL_XL) {
+		dbtp_val = CAN_BUILD_DBTP(cfg->data_timing.tdco,
+					  cfg->data_timing.tseg1,
+					  cfg->data_timing.tseg2,
+					  cfg->data_timing.sjw);
+		CAN_WRITE_REG(base, CAN_PRT_DBTP_OFFSET, dbtp_val);
+	}
+
+	if (cfg->protocol == CAN_PROTOCOL_XL) {
+		xbtp_val = CAN_BUILD_XBTP(cfg->xl_timing.tdco,
+					  cfg->xl_timing.tseg1,
+					  cfg->xl_timing.tseg2,
+					  cfg->xl_timing.sjw);
+		CAN_WRITE_REG(base, CAN_PRT_XBTP_OFFSET, xbtp_val);
+	}
+
+	return CAN_ERROR_NONE;
+}
+
+static enum can_error can_start_prt(uint32_t base, uint32_t timeout)
+{
+	uint32_t reg_val;
+
+	CAN_WRITE_REG(base, CAN_PRT_CTRL_OFFSET, CAN_PRT_CTRL_STRT_MASK);
+
+	while (timeout > 0U) {
+		reg_val = CAN_READ_REG(base, CAN_MH_STS_OFFSET);
+		if (reg_val & CAN_MH_STS_ENABLE_MASK)
+			return CAN_ERROR_NONE;
+		timeout--;
+	}
+
+	return CAN_ERROR_TIMEOUT;
+}
+
+/*
+ * PRT Public API Functions
+ */
+
+enum can_error can_deinit(uint32_t base_addr)
+{
+	enum can_error status;
+	uint32_t timeout = CAN_POLL_TIMEOUT_COUNT;
+	uint32_t reg_val;
+
+	status = can_prt_unlock(base_addr);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	CAN_WRITE_REG(base_addr, CAN_PRT_CTRL_OFFSET, CAN_PRT_CTRL_STOP_MASK);
+
+	while (timeout > 0U) {
+		reg_val = CAN_READ_REG(base_addr, CAN_MH_STS_OFFSET);
+		if (!(reg_val & CAN_MH_STS_ENABLE_MASK))
+			break;
+		timeout--;
+	}
+
+	if (timeout == 0U)
+		return CAN_ERROR_TIMEOUT;
+
+	CAN_WRITE_REG(base_addr, CAN_MH_TX_FQ_CTRL1_OFFSET, 0xFFU);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL1_OFFSET, 0xFFU);
+	CAN_WRITE_REG(base_addr, CAN_MH_TX_FQ_CTRL2_OFFSET, 0x00U);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET, 0x00U);
+	CAN_WRITE_REG(base_addr, CAN_MH_CTRL_OFFSET, 0x00U);
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_start(uint32_t base_addr)
+{
+	enum can_error status;
+
+	status = can_start_mh(base_addr, CAN_POLL_TIMEOUT_COUNT);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	return can_start_prt(base_addr, CAN_POLL_TIMEOUT_COUNT);
+}
+
+enum can_error can_stop(uint32_t base_addr)
+{
+	enum can_error status;
+	uint32_t timeout = CAN_POLL_TIMEOUT_COUNT;
+	uint32_t reg_val;
+
+	status = can_prt_unlock(base_addr);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	CAN_WRITE_REG(base_addr, CAN_PRT_CTRL_OFFSET, CAN_PRT_CTRL_STOP_MASK);
+
+	while (timeout > 0U) {
+		reg_val = CAN_READ_REG(base_addr, CAN_MH_STS_OFFSET);
+		if (!(reg_val & CAN_MH_STS_ENABLE_MASK))
+			break;
+		timeout--;
+	}
+
+	if (timeout == 0U)
+		return CAN_ERROR_TIMEOUT;
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_set_bit_timing(uint32_t base_addr,
+				  const struct can_bit_timing *nominal,
+				  const struct can_bit_timing *data,
+				  const struct can_bit_timing *xl)
+{
+	uint32_t nbtp_val, dbtp_val, xbtp_val;
+
+	if (!nominal)
+		return CAN_ERROR_INVALID_PARAM;
+
+	nbtp_val = CAN_BUILD_NBTP(nominal->brp, nominal->tseg1,
+				  nominal->tseg2, nominal->sjw);
+	CAN_WRITE_REG(base_addr, CAN_PRT_NBTP_OFFSET, nbtp_val);
+
+	if (data) {
+		dbtp_val = CAN_BUILD_DBTP(data->tdco, data->tseg1,
+					  data->tseg2, data->sjw);
+		CAN_WRITE_REG(base_addr, CAN_PRT_DBTP_OFFSET, dbtp_val);
+	}
+
+	if (xl) {
+		xbtp_val = CAN_BUILD_XBTP(xl->tdco, xl->tseg1,
+					  xl->tseg2, xl->sjw);
+		CAN_WRITE_REG(base_addr, CAN_PRT_XBTP_OFFSET, xbtp_val);
+	}
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_set_loopback(uint32_t base_addr, bool enable)
+{
+	uint32_t reg_val;
+
+	can_prt_unlock(base_addr);
+
+	if (enable) {
+		CAN_WRITE_REG(base_addr, CAN_PRT_CTRL_OFFSET,
+			      CAN_PRT_CTRL_TEST_MASK);
+		reg_val = CAN_READ_REG(base_addr, CAN_PRT_TEST_OFFSET);
+		reg_val |= CAN_PRT_TEST_LBCK_MASK;
+		CAN_WRITE_REG(base_addr, CAN_PRT_TEST_OFFSET, reg_val);
+	} else {
+		reg_val = CAN_READ_REG(base_addr, CAN_PRT_TEST_OFFSET);
+		reg_val &= ~CAN_PRT_TEST_LBCK_MASK;
+		CAN_WRITE_REG(base_addr, CAN_PRT_TEST_OFFSET, reg_val);
+		reg_val = CAN_READ_REG(base_addr, CAN_PRT_CTRL_OFFSET);
+		reg_val &= ~CAN_PRT_CTRL_TEST_MASK;
+		CAN_WRITE_REG(base_addr, CAN_PRT_CTRL_OFFSET, reg_val);
+	}
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_set_listen_only(uint32_t base_addr, bool enable)
+{
+	uint32_t reg_val;
+
+	reg_val = CAN_READ_REG(base_addr, CAN_PRT_MODE_OFFSET);
+
+	if (enable)
+		reg_val |= CAN_PRT_MODE_MON_MASK;
+	else
+		reg_val &= ~CAN_PRT_MODE_MON_MASK;
+
+	CAN_WRITE_REG(base_addr, CAN_PRT_MODE_OFFSET, reg_val);
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_software_reset(uint32_t base_addr)
+{
+	enum can_error status;
+	volatile uint32_t i;
+
+	status = can_deinit(base_addr);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	CAN_WRITE_REG(base_addr, CAN_PRT_CTRL_OFFSET, CAN_PRT_CTRL_SRES_MASK);
+
+	for (i = 0; i < CAN_SHORT_DELAY; i++)
+		;
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_get_version(uint32_t base_addr, uint32_t *mh_version,
+			       uint32_t *prt_version)
+{
+	if (mh_version)
+		*mh_version = CAN_READ_REG(base_addr, CAN_MH_VERSION_OFFSET);
+	if (prt_version)
+		*prt_version = CAN_READ_REG(base_addr, CAN_PRT_PREL_OFFSET);
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_tx_fifo_start(uint32_t base_addr, uint8_t queue_idx,
+				 const struct can_queue_config *config)
+{
+	uint32_t reg_val;
+
+	if (queue_idx >= CAN_TX_FIFO_QUEUE_COUNT || !config)
+		return CAN_ERROR_INVALID_PARAM;
+
+	CAN_WRITE_REG(base_addr, tx_fq_start_add_offset[queue_idx],
+		      config->start_addr);
+	reg_val = (uint32_t)config->size & CAN_TX_FQ_SIZE_MAX_DESC_MASK;
+	CAN_WRITE_REG(base_addr, tx_fq_size_offset[queue_idx], reg_val);
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_TX_FQ_CTRL2_OFFSET);
+	reg_val |= (1U << queue_idx);
+	CAN_WRITE_REG(base_addr, CAN_MH_TX_FQ_CTRL2_OFFSET, reg_val);
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_TX_FQ_CTRL0_OFFSET);
+	reg_val |= (1U << queue_idx);
+	CAN_WRITE_REG(base_addr, CAN_MH_TX_FQ_CTRL0_OFFSET, reg_val);
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_rx_fifo_start(uint32_t base_addr, uint8_t queue_idx,
+				 const struct can_queue_config *config)
+{
+	uint32_t reg_val, size_val;
+
+	if (queue_idx >= CAN_RX_FIFO_QUEUE_COUNT || !config)
+		return CAN_ERROR_INVALID_PARAM;
+
+	CAN_WRITE_REG(base_addr, rx_fq_start_add_offset[queue_idx],
+		      config->start_addr);
+
+	size_val = ((uint32_t)config->size & CAN_RX_FQ_SIZE_MAX_DESC_MASK) |
+		   (((uint32_t)config->dc_size << CAN_RX_FQ_SIZE_DC_SIZE_POS) &
+		    CAN_RX_FQ_SIZE_DC_SIZE_MASK);
+	CAN_WRITE_REG(base_addr, rx_fq_size_offset[queue_idx], size_val);
+
+	if (config->continuous) {
+		CAN_WRITE_REG(base_addr, rx_fq_dc_start_add_offset[queue_idx],
+			      config->dc_start_addr);
+		CAN_WRITE_REG(base_addr, rx_fq_rd_add_pt_offset[queue_idx],
+			      config->dc_start_addr & 0xFFFFFFFCU);
+	}
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET);
+	reg_val |= (1U << queue_idx);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL2_OFFSET, reg_val);
+
+	reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL0_OFFSET);
+	reg_val |= (1U << queue_idx);
+	CAN_WRITE_REG(base_addr, CAN_MH_RX_FQ_CTRL0_OFFSET, reg_val);
 
 	return CAN_ERROR_NONE;
 }
