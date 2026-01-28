@@ -546,9 +546,62 @@ struct can_config {
 };
 
 /*
+ * Helper macros for TX message header
+ */
+#define CAN_BUILD_T0_STD(base_id, fdf) \
+	((((uint32_t)(base_id) << 18U) & 0x1FFC0000U) | \
+	 (((uint32_t)(fdf) << 31U) & 0x80000000U))
+
+#define CAN_BUILD_T0_EXT(base_id, ext_id, fdf) \
+	(((uint32_t)(ext_id) & 0x0003FFFFU) | \
+	 (((uint32_t)(base_id) << 18U) & 0x1FFC0000U) | (1U << 29U) | \
+	 (((uint32_t)(fdf) << 31U) & 0x80000000U))
+
+#define CAN_BUILD_T0_XL(prio_id, vcid, sdt, sec, rrs) \
+	((((uint32_t)(sdt) & 0xFFU)) | \
+	 (((uint32_t)(vcid) & 0xFFU) << 8U) | \
+	 (((uint32_t)(sec) & 0x1U) << 16U) | \
+	 (((uint32_t)(rrs) & 0x1U) << 17U) | \
+	 (((uint32_t)(prio_id) & 0x7FFU) << 18U) | \
+	 (0xC0000000U))
+
+#define CAN_BUILD_T1_CC(dlc, rtr) \
+	((((uint32_t)(dlc) & 0xFU) << 16U) | \
+	 (((uint32_t)(rtr) & 0x1U) << 26U))
+
+#define CAN_BUILD_T1_FD(dlc, brs, esi) \
+	((((uint32_t)(dlc) & 0xFU) << 16U) | \
+	 (((uint32_t)(esi) & 0x1U) << 20U) | \
+	 (((uint32_t)(brs) & 0x1U) << 25U))
+
+#define CAN_BUILD_T1_XL(dlc_xl) \
+	(((uint32_t)(dlc_xl) & 0x7FFU) << 16U)
+
+/*
  * Function prototypes - Core API
  */
 enum can_error can_init(const struct can_config *config);
+
+/*
+ * Function prototypes - TX API
+ */
+enum can_error can_tx_fifo_push(uint32_t base_addr, uint8_t fifo_id,
+				uint32_t id, const uint8_t *data, uint32_t len,
+				bool fd, bool xl, bool remote);
+enum can_error can_tx_fifo_push_ext(uint32_t base_addr, uint8_t fifo_id,
+				    uint32_t id, bool extended,
+				    const uint8_t *data, uint32_t len,
+				    bool fd, bool xl, bool brs, bool remote);
+enum can_error can_tx_priority_slot(uint32_t base_addr, uint8_t slot_id,
+				    uint32_t id, bool extended,
+				    const uint8_t *data, uint32_t len,
+				    bool fd, bool xl, bool brs);
+enum can_error can_tx_abort(uint32_t base_addr, uint8_t fifo_id);
+enum can_error can_tx_priority_abort(uint32_t base_addr, uint8_t slot_id);
+enum can_error can_tx_fifo_is_busy(uint32_t base_addr, uint8_t fifo_id,
+				   bool *is_busy);
+enum can_error can_tx_priority_is_busy(uint32_t base_addr, uint8_t slot_id,
+				       bool *is_busy);
 
 /*
  * Register access macros
