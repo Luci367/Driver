@@ -210,6 +210,46 @@ typedef volatile const uint32_t	reg32_ro_t;
 #define CAN_MH_CRC_REG_OFFSET		0x884U
 
 /*
+ * Interrupt Controller (IRC) Register Offsets
+ * Reference: X_CAN User Manual v3.9, Section 1.7.2.1
+ */
+#define CAN_IRC_BASE_OFFSET		0x900U
+#define CAN_IRC_FUNC_RAW_OFFSET		0x900U
+#define CAN_IRC_ERR_RAW_OFFSET		0x904U
+#define CAN_IRC_SAFETY_RAW_OFFSET	0x908U
+#define CAN_IRC_FUNC_CLR_OFFSET		0x910U
+#define CAN_IRC_ERR_CLR_OFFSET		0x914U
+#define CAN_IRC_SAFETY_CLR_OFFSET	0x918U
+#define CAN_IRC_FUNC_ENA_OFFSET		0x920U
+#define CAN_IRC_ERR_ENA_OFFSET		0x924U
+#define CAN_IRC_SAFETY_ENA_OFFSET	0x928U
+
+/*
+ * IRC Interrupt Bit Definitions
+ */
+#define CAN_IRC_FUNC_MH_TX_FQ0_IRQ_MASK		0x00000001U
+#define CAN_IRC_FUNC_MH_TX_FQ1_IRQ_MASK		0x00000002U
+#define CAN_IRC_FUNC_MH_TX_FQ2_IRQ_MASK		0x00000004U
+#define CAN_IRC_FUNC_MH_TX_FQ3_IRQ_MASK		0x00000008U
+#define CAN_IRC_FUNC_MH_TX_FQ4_IRQ_MASK		0x00000010U
+#define CAN_IRC_FUNC_MH_TX_FQ5_IRQ_MASK		0x00000020U
+#define CAN_IRC_FUNC_MH_TX_FQ6_IRQ_MASK		0x00000040U
+#define CAN_IRC_FUNC_MH_TX_FQ7_IRQ_MASK		0x00000080U
+
+#define CAN_IRC_FUNC_MH_RX_FQ0_IRQ_MASK		0x00000100U
+#define CAN_IRC_FUNC_MH_RX_FQ1_IRQ_MASK		0x00000200U
+#define CAN_IRC_FUNC_MH_RX_FQ2_IRQ_MASK		0x00000400U
+#define CAN_IRC_FUNC_MH_RX_FQ3_IRQ_MASK		0x00000800U
+#define CAN_IRC_FUNC_MH_RX_FQ4_IRQ_MASK		0x00001000U
+#define CAN_IRC_FUNC_MH_RX_FQ5_IRQ_MASK		0x00002000U
+#define CAN_IRC_FUNC_MH_RX_FQ6_IRQ_MASK		0x00004000U
+#define CAN_IRC_FUNC_MH_RX_FQ7_IRQ_MASK		0x00008000U
+
+#define CAN_IRC_FUNC_MH_TX_PQ_IRQ_MASK		0x00010000U
+#define CAN_IRC_FUNC_MH_TX_ABORT_IRQ_MASK	0x00100000U
+#define CAN_IRC_FUNC_MH_RX_ABORT_IRQ_MASK	0x00200000U
+
+/*
  * MH Register Bit Field Definitions
  */
 
@@ -721,6 +761,43 @@ enum can_error can_tx_fifo_start(uint32_t base_addr, uint8_t queue_idx,
 				 const struct can_queue_config *config);
 enum can_error can_rx_fifo_start(uint32_t base_addr, uint8_t queue_idx,
 				 const struct can_queue_config *config);
+
+/*
+ * Callback types for interrupt handling
+ */
+typedef void (*can_rx_callback_t)(uint8_t fifo_id, void *user_ctx);
+typedef void (*can_tx_callback_t)(uint8_t fifo_id, void *user_ctx);
+typedef void (*can_tx_pq_callback_t)(uint8_t slot_id, void *user_ctx);
+typedef void (*can_error_callback_t)(enum can_error error, void *user_ctx);
+typedef void (*can_bus_state_callback_t)(enum can_bus_state new_state,
+					 void *user_ctx);
+
+struct can_irq_callbacks {
+	can_rx_callback_t	rx_callbacks[CAN_RX_FIFO_QUEUE_COUNT];
+	can_tx_callback_t	tx_callbacks[CAN_TX_FIFO_QUEUE_COUNT];
+	can_tx_pq_callback_t	tx_pq_callback;
+	can_error_callback_t	error_callback;
+	can_bus_state_callback_t bus_state_callback;
+	void			*user_ctx;
+};
+
+/*
+ * Function prototypes - Interrupt API
+ */
+enum can_error can_interrupt_enable(uint32_t base_addr, uint32_t func_mask,
+				    uint32_t err_mask, uint32_t safety_mask);
+enum can_error can_interrupt_clear(uint32_t base_addr, uint32_t func_mask,
+				   uint32_t err_mask, uint32_t safety_mask);
+enum can_error can_interrupt_get_raw_status(uint32_t base_addr,
+					    uint32_t *func_status,
+					    uint32_t *err_status,
+					    uint32_t *safety_status);
+enum can_error can_register_callbacks(uint32_t base_addr,
+				      const struct can_irq_callbacks *callbacks);
+void can_irq_handler(uint32_t base_addr);
+enum can_error can_get_irq_pending(uint32_t base_addr, uint32_t *func_pending,
+				   uint32_t *err_pending,
+				   uint32_t *safety_pending);
 
 /*
  * Register access macros

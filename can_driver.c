@@ -199,6 +199,8 @@ static enum can_error can_start_rx_fifo_queues(uint32_t base,
 					       const struct can_config *cfg);
 static enum can_error can_start_tx_fifo_queues(uint32_t base,
 					       const struct can_config *cfg);
+static enum can_error can_enable_interrupts(uint32_t base,
+					    const struct can_config *cfg);
 static enum can_error can_prt_unlock(uint32_t base);
 
 /*
@@ -264,22 +266,27 @@ enum can_error can_init(const struct can_config *cfg)
 	if (status != CAN_ERROR_NONE)
 		return status;
 
-	/* Step 10: Start MH */
+	/* Step 10: Enable Interrupts */
+	status = can_enable_interrupts(base, cfg);
+	if (status != CAN_ERROR_NONE)
+		return status;
+
+	/* Step 12: Start MH */
 	status = can_start_mh(base, CAN_POLL_TIMEOUT_COUNT);
 	if (status != CAN_ERROR_NONE)
 		return status;
 
-	/* Step 11: Start RX FIFO Queues */
+	/* Step 13: Start RX FIFO Queues */
 	status = can_start_rx_fifo_queues(base, cfg);
 	if (status != CAN_ERROR_NONE)
 		return status;
 
-	/* Step 12: Start PRT */
+	/* Step 14: Start PRT */
 	status = can_start_prt(base, CAN_POLL_TIMEOUT_COUNT);
 	if (status != CAN_ERROR_NONE)
 		return status;
 
-	/* Step 13: Start TX FIFO Queues */
+	/* Step 15: Start TX FIFO Queues */
 	status = can_start_tx_fifo_queues(base, cfg);
 	if (status != CAN_ERROR_NONE)
 		return status;
@@ -505,6 +512,16 @@ static enum can_error can_prt_unlock(uint32_t base)
 {
 	CAN_WRITE_REG(base, CAN_PRT_LOCK_OFFSET, CAN_PRT_UNLOCK_KEY1);
 	CAN_WRITE_REG(base, CAN_PRT_LOCK_OFFSET, CAN_PRT_UNLOCK_KEY2);
+	return CAN_ERROR_NONE;
+}
+
+static enum can_error can_enable_interrupts(uint32_t base,
+					    const struct can_config *cfg)
+{
+	CAN_WRITE_REG(base, CAN_IRC_FUNC_ENA_OFFSET, cfg->func_int_enable);
+	CAN_WRITE_REG(base, CAN_IRC_ERR_ENA_OFFSET, cfg->err_int_enable);
+	CAN_WRITE_REG(base, CAN_IRC_SAFETY_ENA_OFFSET, cfg->safety_int_enable);
+
 	return CAN_ERROR_NONE;
 }
 
@@ -1649,6 +1666,131 @@ enum can_error can_rx_update_read_ptr(uint32_t base_addr, uint8_t fifo_id,
 
 	CAN_WRITE_REG(base_addr, rx_fq_rd_add_pt_offset[fifo_id],
 		      new_addr & 0xFFFFFFFCU);
+
+	return CAN_ERROR_NONE;
+}
+
+/*
+ * Interrupt Controller (IRC) API Implementation
+ */
+
+static struct can_irq_callbacks g_can_callbacks;
+static bool g_callbacks_registered;
+
+enum can_error can_interrupt_enable(uint32_t base_addr, uint32_t func_mask,
+				    uint32_t err_mask, uint32_t safety_mask)
+{
+	CAN_WRITE_REG(base_addr, CAN_IRC_FUNC_ENA_OFFSET, func_mask);
+	CAN_WRITE_REG(base_addr, CAN_IRC_ERR_ENA_OFFSET, err_mask);
+	CAN_WRITE_REG(base_addr, CAN_IRC_SAFETY_ENA_OFFSET, safety_mask);
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_interrupt_clear(uint32_t base_addr, uint32_t func_mask,
+				   uint32_t err_mask, uint32_t safety_mask)
+{
+	CAN_WRITE_REG(base_addr, CAN_IRC_FUNC_CLR_OFFSET, func_mask);
+	CAN_WRITE_REG(base_addr, CAN_IRC_ERR_CLR_OFFSET, err_mask);
+	CAN_WRITE_REG(base_addr, CAN_IRC_SAFETY_CLR_OFFSET, safety_mask);
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_interrupt_get_raw_status(uint32_t base_addr,
+					    uint32_t *func_status,
+					    uint32_t *err_status,
+					    uint32_t *safety_status)
+{
+	if (func_status)
+		*func_status = CAN_READ_REG(base_addr, CAN_IRC_FUNC_RAW_OFFSET);
+	if (err_status)
+		*err_status = CAN_READ_REG(base_addr, CAN_IRC_ERR_RAW_OFFSET);
+	if (safety_status)
+		*safety_status = CAN_READ_REG(base_addr,
+					      CAN_IRC_SAFETY_RAW_OFFSET);
+
+	return CAN_ERROR_NONE;
+}
+
+enum can_error can_register_callbacks(uint32_t base_addr,
+				      const struct can_irq_callbacks *callbacks)
+{
+	(void)base_addr;
+
+	if (!callbacks)
+		return CAN_ERROR_INVALID_PARAM;
+
+	memcpy(&g_can_callbacks, callbacks, sizeof(struct can_irq_callbacks));
+	g_callbacks_registered = true;
+
+	return CAN_ERROR_NONE;
+}
+
+void can_irq_handler(uint32_t base_addr)
+{
+	uint32_t func_raw, err_raw, safety_raw;
+	uint8_t i;
+
+	/* Read IRC status */
+	func_raw = CAN_READ_REG(base_addr, CAN_IRC_FUNC_RAW_OFFSET);
+	err_raw = CAN_READ_REG(base_addr, CAN_IRC_ERR_RAW_OFFSET);
+	safety_raw = CAN_READ_REG(base_addr, CAN_IRC_SAFETY_RAW_OFFSET);
+
+	/* Clear interrupts first */
+	if (func_raw)
+		CAN_WRITE_REG(base_addr, CAN_IRC_FUNC_CLR_OFFSET, func_raw);
+	if (err_raw)
+		CAN_WRITE_REG(base_addr, CAN_IRC_ERR_CLR_OFFSET, err_raw);
+	if (safety_raw)
+		CAN_WRITE_REG(base_addr, CAN_IRC_SAFETY_CLR_OFFSET, safety_raw);
+
+	if (!g_callbacks_registered)
+		return;
+
+	/* Dispatch RX FIFO callbacks */
+	for (i = 0U; i < CAN_RX_FIFO_QUEUE_COUNT; i++) {
+		if (func_raw & (0x100U << i)) {
+			if (g_can_callbacks.rx_callbacks[i])
+				g_can_callbacks.rx_callbacks[i](i,
+					g_can_callbacks.user_ctx);
+		}
+	}
+
+	/* Dispatch TX FIFO callbacks */
+	for (i = 0U; i < CAN_TX_FIFO_QUEUE_COUNT; i++) {
+		if (func_raw & (1U << i)) {
+			if (g_can_callbacks.tx_callbacks[i])
+				g_can_callbacks.tx_callbacks[i](i,
+					g_can_callbacks.user_ctx);
+		}
+	}
+
+	/* TX Priority Queue callback */
+	if (func_raw & CAN_IRC_FUNC_MH_TX_PQ_IRQ_MASK) {
+		if (g_can_callbacks.tx_pq_callback)
+			g_can_callbacks.tx_pq_callback(0U,
+				g_can_callbacks.user_ctx);
+	}
+
+	/* Error callbacks */
+	if (err_raw && g_can_callbacks.error_callback) {
+		g_can_callbacks.error_callback(CAN_ERROR_PROTOCOL,
+			g_can_callbacks.user_ctx);
+	}
+}
+
+enum can_error can_get_irq_pending(uint32_t base_addr, uint32_t *func_pending,
+				   uint32_t *err_pending,
+				   uint32_t *safety_pending)
+{
+	if (func_pending)
+		*func_pending = CAN_READ_REG(base_addr, CAN_IRC_FUNC_RAW_OFFSET);
+	if (err_pending)
+		*err_pending = CAN_READ_REG(base_addr, CAN_IRC_ERR_RAW_OFFSET);
+	if (safety_pending)
+		*safety_pending = CAN_READ_REG(base_addr,
+					       CAN_IRC_SAFETY_RAW_OFFSET);
 
 	return CAN_ERROR_NONE;
 }
