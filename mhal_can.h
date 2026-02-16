@@ -297,39 +297,39 @@ can_hal_set_config(P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) Config);
  *  Function    : can_hal_init
  *  Description : Initialize specific CAN controller hardware.
  *                Config must be set via can_hal_set_config() first.
- *  Parameters  : Controller - Controller ID (0 to CAN_CONTROLLER_CNT-1)
+ *  Parameters  : cid - Controller ID (0 to CAN_CONTROLLER_CNT-1)
  *  Return      : void
  *****************************************************************************/
-FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) Controller);
+FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_deinit
  *  Description : De-initialize specific CAN controller.
- *  Parameters  : Controller - Controller ID
+ *  Parameters  : cid - Controller ID
  *  Return      : void
  *****************************************************************************/
-FUNC(void, CAN_CODE) can_hal_deinit(VAR(uint8, AUTOMATIC) Controller);
+FUNC(void, CAN_CODE) can_hal_deinit(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_set_controller_mode
  *  Description : Set controller mode (start/stop/sleep/wakeup).
- *  Parameters  : Controller - Controller ID
+ *  Parameters  : cid - Controller ID
  *                Transition - Target state
  *  Return      : E_OK on success, E_NOT_OK on failure
  *****************************************************************************/
 FUNC(Std_ReturnType, CAN_CODE)
-can_hal_set_controller_mode(VAR(uint8, AUTOMATIC) Controller,
+can_hal_set_controller_mode(VAR(uint8, AUTOMATIC) cid,
                             VAR(Can_ControllerStateType, AUTOMATIC) Transition);
 
 /******************************************************************************
  *  Function    : can_hal_get_controller_mode
  *  Description : Get current controller mode.
- *  Parameters  : Controller - Controller ID
+ *  Parameters  : cid - Controller ID
  *                ControllerModePtr - Output for mode
  *  Return      : E_OK on success
  *****************************************************************************/
 FUNC(Std_ReturnType, CAN_CODE)
-can_hal_get_controller_mode(VAR(uint8, AUTOMATIC) Controller,
+can_hal_get_controller_mode(VAR(uint8, AUTOMATIC) cid,
                             P2VAR(Can_ControllerStateType, AUTOMATIC,
                                   CAN_APPL_DATA) ControllerModePtr);
 
@@ -364,84 +364,84 @@ can_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hth,
 /******************************************************************************
  *  Function    : can_hal_enable_controller_interrupts
  *  Description : Enable interrupts for controller.
- *  Parameters  : Controller - Controller ID
+ *  Parameters  : cid - Controller ID
  *  Return      : void
  *****************************************************************************/
 FUNC(void, CAN_CODE)
-can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) Controller);
+can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_disable_controller_interrupts
  *  Description : Disable interrupts for controller.
- *  Parameters  : Controller - Controller ID
+ *  Parameters  : cid - Controller ID
  *  Return      : void
  *****************************************************************************/
 FUNC(void, CAN_CODE)
-can_hal_disable_controller_interrupts(VAR(uint8, AUTOMATIC) Controller);
+can_hal_disable_controller_interrupts(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_check_wakeup
  *  Description : Check for wakeup event.
- *  Parameters  : Controller - Controller ID
+ *  Parameters  : cid - Controller ID
  *  Return      : E_OK if wakeup detected
  *****************************************************************************/
 FUNC(Std_ReturnType, CAN_CODE)
-can_hal_check_wakeup(VAR(uint8, AUTOMATIC) Controller);
+can_hal_check_wakeup(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_get_controller_error_state
  *  Description : Get controller error state.
- *  Parameters  : Controller - Controller ID
+ *  Parameters  : cid - Controller ID
  *                ErrorStatePtr - Output for error state
  *  Return      : E_OK on success
  *****************************************************************************/
 FUNC(Std_ReturnType, CAN_CODE)
-can_hal_get_controller_error_state(VAR(uint8, AUTOMATIC) Controller,
+can_hal_get_controller_error_state(VAR(uint8, AUTOMATIC) cid,
                                    P2VAR(Can_ErrorStateType, AUTOMATIC,
                                          CAN_APPL_DATA) ErrorStatePtr);
 
 /******************************************************************************
  *  Function    : can_hal_set_baudrate
  *  Description : Set controller baud rate. Controller must be STOPPED.
- *  Parameters  : Controller - Controller ID
- *                Baudrate - Arbitration baud rate value
+ *  Parameters  : cid - Controller ID
+ *                arb_baudrate - Arbitration baud rate value
  *  Return      : void
  *****************************************************************************/
 FUNC(void, CAN_CODE)
-can_hal_set_baudrate(VAR(uint8, AUTOMATIC) Controller,
-                     VAR(uint16, AUTOMATIC) Baudrate);
+can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
+                     VAR(uint16, AUTOMATIC) arb_baudrate);
 
 /******************************************************************************
  *  Function    : can_hal_main_function_read
  *  Description : Polling function for RX processing.
- *  Parameters  : void
+ *  Parameters  : cid - Controller ID
  *  Return      : void
  *****************************************************************************/
-FUNC(void, CAN_CODE) can_hal_main_function_read(void);
+FUNC(void, CAN_CODE) can_hal_main_function_read(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_main_function_write
  *  Description : Polling function for TX confirmation.
- *  Parameters  : void
+ *  Parameters  : cid - Controller ID
  *  Return      : void
  *****************************************************************************/
-FUNC(void, CAN_CODE) can_hal_main_function_write(void);
+FUNC(void, CAN_CODE) can_hal_main_function_write(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_main_function_busoff
  *  Description : Polling function for bus-off handling.
- *  Parameters  : void
+ *  Parameters  : cid - Controller ID
  *  Return      : void
  *****************************************************************************/
-FUNC(void, CAN_CODE) can_hal_main_function_busoff(void);
+FUNC(void, CAN_CODE) can_hal_main_function_busoff(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_main_function_wakeup
  *  Description : Polling function for wakeup handling.
- *  Parameters  : void
+ *  Parameters  : cid - Controller ID
  *  Return      : void
  *****************************************************************************/
-FUNC(void, CAN_CODE) can_hal_main_function_wakeup(void);
+FUNC(void, CAN_CODE) can_hal_main_function_wakeup(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  HAL FUNCTION PROTOTYPES - CAN XL
@@ -461,47 +461,47 @@ canxl_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
 /******************************************************************************
  *  Function    : canxl_hal_get_controller_mode
  *  Description : Get CAN XL controller mode.
- *  Parameters  : CtrlIdx - Controller index
+ *  Parameters  : cid - Controller ID
  *                CtrlModePtr - Output for mode
  *  Return      : E_OK on success
  *****************************************************************************/
 FUNC(Std_ReturnType, CANXL_CODE)
-canxl_hal_get_controller_mode(VAR(uint8, AUTOMATIC) CtrlIdx,
+canxl_hal_get_controller_mode(VAR(uint8, AUTOMATIC) cid,
                               P2VAR(Can_ControllerStateType, AUTOMATIC,
                                     CANXL_APPL_CONST) CtrlModePtr);
 
 /******************************************************************************
  *  Function    : canxl_hal_transmit
  *  Description : Trigger XL frame transmission from buffer.
- *  Parameters  : CtrlIdx - Controller index
+ *  Parameters  : cid - Controller ID
  *                BufIdx - Buffer index
  *                FrameType - Frame type
  *  Return      : E_OK on success
  *****************************************************************************/
 FUNC(Std_ReturnType, CANXL_CODE)
-canxl_hal_transmit(VAR(uint8, AUTOMATIC) CtrlIdx, VAR(uint16, AUTOMATIC) BufIdx,
+canxl_hal_transmit(VAR(uint8, AUTOMATIC) cid, VAR(uint16, AUTOMATIC) BufIdx,
                    VAR(uint16, AUTOMATIC) FrameType);
 
 /******************************************************************************
  *  Function    : canxl_hal_enable_egress_timestamp
  *  Description : Enable TX timestamp for buffer.
- *  Parameters  : CtrlIdx - Controller index
+ *  Parameters  : cid - Controller ID
  *                BufIdx - Buffer index
  *  Return      : void
  *****************************************************************************/
 FUNC(void, CANXL_CODE)
-canxl_hal_enable_egress_timestamp(VAR(uint8, AUTOMATIC) CtrlIdx,
+canxl_hal_enable_egress_timestamp(VAR(uint8, AUTOMATIC) cid,
                                   VAR(uint16, AUTOMATIC) BufIdx);
 
 /******************************************************************************
  *  Function    : canxl_hal_read
  *  Description : Read received CAN XL message.
- *  Parameters  : CtrlIdx - Controller index
+ *  Parameters  : cid - Controller ID
  *                PduInfo - Output for XL message
  *  Return      : E_OK if message read
  *****************************************************************************/
 FUNC(Std_ReturnType, CANXL_CODE)
-canxl_hal_read(VAR(uint8, AUTOMATIC) CtrlIdx,
+canxl_hal_read(VAR(uint8, AUTOMATIC) cid,
                P2VAR(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo);
 
 /******************************************************************************
@@ -542,9 +542,9 @@ can_hal_get_hrh_fd_info(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
 /******************************************************************************
  *  Function    : can_hal_irq_handler
  *  Description : CAN interrupt handler.
- *  Parameters  : Controller - Controller ID
+ *  Parameters  : cid - Controller ID
  *  Return      : void
  *****************************************************************************/
-FUNC(void, CAN_CODE) can_hal_irq_handler(VAR(uint8, AUTOMATIC) Controller);
+FUNC(void, CAN_CODE) can_hal_irq_handler(VAR(uint8, AUTOMATIC) cid);
 
 #endif /* MHAL_CAN_H */
