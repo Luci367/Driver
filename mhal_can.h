@@ -82,7 +82,7 @@ typedef enum {
   CAN_CS_UNINIT = 0U,
   CAN_CS_STARTED,
   CAN_CS_STOPPED,
-  CAN_CS_SLEEP,
+  /* NOTE: CAN_CS_SLEEP not supported by X_CAN IP - no wakeup mechanism */
   CAN_CS_UNKNOWN
 } Can_ControllerStateType;
 
@@ -379,14 +379,7 @@ can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) cid);
 FUNC(void, CAN_CODE)
 can_hal_disable_controller_interrupts(VAR(uint8, AUTOMATIC) cid);
 
-/******************************************************************************
- *  Function    : can_hal_check_wakeup
- *  Description : Check for wakeup event.
- *  Parameters  : cid - Controller ID
- *  Return      : E_OK if wakeup detected
- *****************************************************************************/
-FUNC(Std_ReturnType, CAN_CODE)
-can_hal_check_wakeup(VAR(uint8, AUTOMATIC) cid);
+/* NOTE: can_hal_check_wakeup not supported - X_CAN IP has no wakeup mechanism */
 
 /******************************************************************************
  *  Function    : can_hal_get_controller_error_state
@@ -435,13 +428,7 @@ FUNC(void, CAN_CODE) can_hal_main_function_write(VAR(uint8, AUTOMATIC) cid);
  *****************************************************************************/
 FUNC(void, CAN_CODE) can_hal_main_function_busoff(VAR(uint8, AUTOMATIC) cid);
 
-/******************************************************************************
- *  Function    : can_hal_main_function_wakeup
- *  Description : Polling function for wakeup handling.
- *  Parameters  : cid - Controller ID
- *  Return      : void
- *****************************************************************************/
-FUNC(void, CAN_CODE) can_hal_main_function_wakeup(VAR(uint8, AUTOMATIC) cid);
+/* NOTE: can_hal_main_function_wakeup not supported - X_CAN IP has no wakeup mechanism */
 
 /******************************************************************************
  *  HAL FUNCTION PROTOTYPES - CAN XL
@@ -482,16 +469,9 @@ FUNC(Std_ReturnType, CANXL_CODE)
 canxl_hal_transmit(VAR(uint8, AUTOMATIC) cid, VAR(uint16, AUTOMATIC) BufIdx,
                    VAR(uint16, AUTOMATIC) FrameType);
 
-/******************************************************************************
- *  Function    : canxl_hal_enable_egress_timestamp
- *  Description : Enable TX timestamp for buffer.
- *  Parameters  : cid - Controller ID
- *                BufIdx - Buffer index
- *  Return      : void
- *****************************************************************************/
-FUNC(void, CANXL_CODE)
-canxl_hal_enable_egress_timestamp(VAR(uint8, AUTOMATIC) cid,
-                                  VAR(uint16, AUTOMATIC) BufIdx);
+/* NOTE: canxl_hal_enable_egress_timestamp not supported - X_CAN IP always
+ *       captures timestamps when HD bit is set in TX descriptor.
+ *       No per-buffer enable/disable API exists. */
 
 /******************************************************************************
  *  Function    : canxl_hal_read
