@@ -26,6 +26,29 @@
 #define MHAL_CAN_SW_PATCH_VERSION       (0U)
 
 /******************************************************************************
+ *  CAN ID MASKS
+ *****************************************************************************/
+
+/* Standard ID mask (11-bit) */
+#define STD_ID_MASK                 (0x000007FFUL)
+#define STD_ID_DATA_MASK            (0x00000000UL)
+
+/* Extended ID mask (29-bit) */
+#define EXT_ID_MASK                 (0x1FFFFFFFUL)
+#define EXT_ID_DATA_MASK            (0x80000000UL)
+
+/* ID type indicator mask */
+#define ID_MASK(x)                  ((x) << 30UL)
+
+/* FD frame ID masks - OR with CAN ID to indicate FD frame */
+#define FD_STD_MASK                 (ID_MASK(1UL) | STD_ID_DATA_MASK)
+#define FD_EXT_MASK                 (ID_MASK(3UL) | EXT_ID_DATA_MASK)
+
+/* Check if ID indicates FD frame */
+#define IS_FD_FRAME(id)             (((id) & ID_MASK(1UL)) != 0UL)
+#define IS_EXT_ID(id)               (((id) & EXT_ID_DATA_MASK) != 0UL)
+
+/******************************************************************************
  *  TYPE DEFINITIONS
  *****************************************************************************/
 
@@ -121,6 +144,22 @@ typedef enum
 } Can_ObjectType;
 
 /*---------------------------------------------------------------------------*/
+/* Payload Length Type (Classic vs FD)                                       */
+/*---------------------------------------------------------------------------*/
+
+typedef enum
+{
+    CAN_PL_8 = 0U,      /* Classic CAN: 8 bytes max */
+    CAN_PL_12,          /* FD: 12 bytes */
+    CAN_PL_16,          /* FD: 16 bytes */
+    CAN_PL_20,          /* FD: 20 bytes */
+    CAN_PL_24,          /* FD: 24 bytes */
+    CAN_PL_32,          /* FD: 32 bytes */
+    CAN_PL_48,          /* FD: 48 bytes */
+    CAN_PL_64           /* FD: 64 bytes */
+} Can_ObjectPLType;
+
+/*---------------------------------------------------------------------------*/
 /* PDU Type (Classic CAN / CAN FD)                                           */
 /*---------------------------------------------------------------------------*/
 
@@ -178,14 +217,12 @@ typedef struct
 
 typedef struct
 {
-    uint16 BaudRateConfigId;    /* Baud rate config ID */
-    uint8 FdPropSeg;            /* FD Propagation segment */
-    uint8 FdPhaseSeg1;          /* FD Phase segment 1 */
-    uint8 FdPhaseSeg2;          /* FD Phase segment 2 */
-    uint8 FdSyncJumpWidth;      /* FD Sync jump width */
-    uint16 FdPrescaler;         /* FD Baud rate prescaler */
-    boolean TxBitRateSwitch;    /* TX Bit Rate Switch enable */
-    uint8 TdcOffset;            /* Transmitter delay compensation */
+    uint16 CanControllerFdBaudRate;     /* FD Baud rate */
+    uint8 CanControllerPropSeg;         /* Propagation segment */
+    uint8 CanControllerSeg1;            /* Phase segment 1 */
+    uint8 CanControllerSeg2;            /* Phase segment 2 */
+    uint8 CanControllerSyncJumpWidth;   /* Sync jump width */
+    boolean CanControllerTxBitRateSwitch; /* BRS enable */
 } Can_ControllerFdBaudrateCfgType;
 
 /*---------------------------------------------------------------------------*/
@@ -198,11 +235,11 @@ typedef struct
     uint32 BaseAddress;         /* Register base address */
     uint32 ClockFrequency;      /* CAN clock frequency */
     P2CONST(Can_ControllerBaudrateCfgType, AUTOMATIC, CAN_CONST) BaudrateCfg;
-    P2CONST(Can_ControllerFdBaudrateCfgType, AUTOMATIC, CAN_CONST) FdBaudrateCfg;
+    P2CONST(Can_ControllerFdBaudrateCfgType, AUTOMATIC, CAN_CONST) CanControllerFdBaudrateConfig;
     uint8 BaudrateCfgCount;     /* Number of baud rate configs */
     uint8 DefaultBaudrateIdx;   /* Default baud rate index */
-    boolean FdEnable;           /* FD support enable */
     boolean XlEnable;           /* XL support enable */
+    /* FD is enabled if CanControllerFdBaudrateConfig != NULL */
 } Can_ControllerType;
 
 /*---------------------------------------------------------------------------*/
@@ -212,12 +249,14 @@ typedef struct
 typedef struct
 {
     P2CONST(Can_ControllerType, AUTOMATIC, CAN_CONST) CanControllerRef;
-    uint16 CanObjectId;         /* Hardware object ID */
+    uint16 CanObjectId;             /* Hardware object ID */
     Can_ObjectType CanObjectType;   /* TX or RX */
-    CanIdType CanIdType;        /* Standard/Extended/Mixed */
-    uint8 HwFifoId;             /* FIFO queue ID (0-7) */
-    uint16 HwObjectCount;       /* Number of HW objects */
-    boolean PollingMode;        /* Polling or interrupt */
+    CanIdType CanIdType;            /* Standard/Extended/Mixed */
+    uint8 HwFifoId;                 /* FIFO queue ID (0-7) */
+    uint16 HwObjectCount;           /* Number of HW objects */
+    boolean PollingMode;            /* Polling or interrupt */
+    Can_ObjectPLType CanObjectPayloadLength;  /* Payload length (FD if >8) */
+    uint8 CanFdPaddingValue;        /* FD frame padding value */
 } Can_HardwareObjectType;
 
 /*---------------------------------------------------------------------------*/
@@ -284,9 +323,13 @@ FUNC(Std_ReturnType, CAN_CODE) can_hal_get_controller_mode
 
 /******************************************************************************
  *  Function    : can_hal_write
- *  Description : Transmit CAN message.
+ *  Description : Transmit CAN message (Classic or FD).
+ *                FD mode determined by HTH config:
+ *                - CanObjectPayloadLength > CAN_PL_8 = FD frame
+ *                - BRS from CanControllerTxBitRateSwitch
+ *                - ID can have FD_STD_MASK/FD_EXT_MASK applied
  *  Parameters  : Hth - Hardware Transmit Handle
- *                PduInfo - Message data
+ *                PduInfo - Message data (id may have FD mask)
  *  Return      : E_OK if queued, E_NOT_OK on error, CAN_BUSY if full
  *****************************************************************************/
 FUNC(Std_ReturnType, CAN_CODE) can_hal_write
@@ -297,7 +340,9 @@ FUNC(Std_ReturnType, CAN_CODE) can_hal_write
 
 /******************************************************************************
  *  Function    : can_hal_read
- *  Description : Read received CAN message.
+ *  Description : Read received CAN message (Classic or FD).
+ *                FD indication in returned PduInfo.id via FD masks.
+ *                Use IS_FD_FRAME(id) to check if FD.
  *  Parameters  : Hth - Hardware Receive Handle
  *                PduInfo - Output for message
  *  Return      : E_OK if message read, E_NOT_OK if empty/error
@@ -468,6 +513,40 @@ FUNC(Std_ReturnType, CANXL_CODE) canxl_hal_read
 (
     VAR(uint8, AUTOMATIC) CtrlIdx,
     P2VAR(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo
+);
+
+/******************************************************************************
+ *  INTERNAL / HELPER FUNCTIONS
+ *****************************************************************************/
+
+/******************************************************************************
+ *  Function    : can_hal_get_hth_fd_info
+ *  Description : Get FD configuration for HTH.
+ *  Parameters  : Hth - Hardware Transmit Handle
+ *                IsFd - Output: TRUE if FD configured
+ *                Brs - Output: TRUE if BRS enabled
+ *                PaddingValue - Output: FD padding byte
+ *  Return      : E_OK if HTH valid
+ *****************************************************************************/
+FUNC(Std_ReturnType, CAN_CODE) can_hal_get_hth_fd_info
+(
+    VAR(Can_HwHandleType, AUTOMATIC) Hth,
+    P2VAR(boolean, AUTOMATIC, CAN_APPL_DATA) IsFd,
+    P2VAR(boolean, AUTOMATIC, CAN_APPL_DATA) Brs,
+    P2VAR(uint8, AUTOMATIC, CAN_APPL_DATA) PaddingValue
+);
+
+/******************************************************************************
+ *  Function    : can_hal_get_hrh_fd_info
+ *  Description : Get FD configuration for HRH.
+ *  Parameters  : Hrh - Hardware Receive Handle
+ *                MaxPayload - Output: Max payload length
+ *  Return      : E_OK if HRH valid
+ *****************************************************************************/
+FUNC(Std_ReturnType, CAN_CODE) can_hal_get_hrh_fd_info
+(
+    VAR(Can_HwHandleType, AUTOMATIC) Hrh,
+    P2VAR(Can_ObjectPLType, AUTOMATIC, CAN_APPL_DATA) MaxPayload
 );
 
 /******************************************************************************
