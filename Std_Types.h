@@ -103,13 +103,21 @@ typedef struct
 #define AUTOMATIC
 #define TYPEDEF
 
-/* Code section macros */
+/* Code section macros - CAN */
 #define CAN_CODE
 #define CAN_VAR
 #define CAN_CONST
 #define CAN_APPL_CODE
 #define CAN_APPL_DATA
 #define CAN_APPL_CONST
+
+/* Code section macros - CAN XL */
+#define CANXL_CODE
+#define CANXL_VAR
+#define CANXL_CONST
+#define CANXL_APPL_CODE
+#define CANXL_APPL_DATA
+#define CANXL_APPL_CONST
 
 /******************************************************************************
  *  ON/OFF MACROS
