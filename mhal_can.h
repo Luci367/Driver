@@ -379,7 +379,8 @@ can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) cid);
 FUNC(void, CAN_CODE)
 can_hal_disable_controller_interrupts(VAR(uint8, AUTOMATIC) cid);
 
-/* NOTE: can_hal_check_wakeup not supported - X_CAN IP has no wakeup mechanism */
+/* NOTE: can_hal_check_wakeup not supported - X_CAN IP has no wakeup mechanism
+ */
 
 /******************************************************************************
  *  Function    : can_hal_get_controller_error_state
@@ -428,7 +429,8 @@ FUNC(void, CAN_CODE) can_hal_main_function_write(VAR(uint8, AUTOMATIC) cid);
  *****************************************************************************/
 FUNC(void, CAN_CODE) can_hal_main_function_busoff(VAR(uint8, AUTOMATIC) cid);
 
-/* NOTE: can_hal_main_function_wakeup not supported - X_CAN IP has no wakeup mechanism */
+/* NOTE: can_hal_main_function_wakeup not supported - X_CAN IP has no wakeup
+ * mechanism */
 
 /******************************************************************************
  *  HAL FUNCTION PROTOTYPES - CAN XL
