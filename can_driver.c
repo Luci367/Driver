@@ -230,6 +230,15 @@ static enum can_error can_enable_interrupts(uint32_t base,
  *
  * Follows programming guidelines from Manual Section 1.4.7.1.
  *
+ * TODO VERIFICATION: Reference (xcand_config_and_start) sequence:
+ *   1. xcan_prt_set_config() - PRT config (bit timing, mode)
+ *   2. xcand_mh_init() - MH global config, RX/TX FIFO init, RX filter config
+ *   3. xcand_irc_set_config() - IRC config
+ *   4. xcand_mh_start() - Start MH
+ *   5. Loop: xcand_mh_rx_fifo_start() for each enabled RX FIFO
+ *   6. xcan_prt_start_module() - Start PRT
+ *   7. TX queues started on enqueue (not during init)
+ *
  * Return: enum can_error code
  */
 enum can_error can_init(const struct can_config *cfg) {
@@ -617,6 +626,13 @@ static enum can_error can_prt_unlock(uint32_t base) {
   return CAN_ERROR_NONE;
 }
 
+/*
+ * TODO VERIFICATION: Reference (xcan_prt_software_reset) requires:
+ *   1. PRT must be STOPPED before software reset
+ *   2. Check xcan_prt_check_if_started() == FALSE
+ *   3. Only then write CTRL.SRES
+ *   Currently missing: check that PRT is stopped
+ */
 static enum can_error can_prt_software_reset(uint32_t base) {
   volatile uint32_t i;
 
@@ -725,6 +741,15 @@ can_configure_tx_fifo_queues(uint32_t base, const struct can_config *cfg) {
   return CAN_ERROR_NONE;
 }
 
+/*
+ * TODO VERIFICATION: Reference (xcand_mh_set_rx_fifo_config) differences:
+ *   1. Reference writes ENABLE bit FIRST (RX_FQ_CTRL2)
+ *   2. Then SIZE (MAX_DESC + DC_SIZE)
+ *   3. Then START_ADD (descriptor array address)
+ *   4. For Continuous Mode: DC_START_ADD then RD_ADD_PT with VAL[1:0]=0b11
+ *      - Initial RD_ADD_PT = dc_start_addr + 3 (avoids overlap detection)
+ *   5. Reference checks DC_SIZE granularity (must be 32-byte aligned)
+ */
 static enum can_error
 can_configure_rx_fifo_queues(uint32_t base, const struct can_config *cfg) {
   uint32_t size_val;
@@ -745,6 +770,7 @@ can_configure_rx_fifo_queues(uint32_t base, const struct can_config *cfg) {
       if (cfg->rx_fifo_queues[i].continuous) {
         CAN_WRITE_REG(base, rx_fq_dc_start_add_offset[i],
                       cfg->rx_fifo_queues[i].dc_start_addr);
+        /* TODO: Reference uses dc_start_addr + 3 for initial RD_ADD_PT */
         CAN_WRITE_REG(base, rx_fq_rd_add_pt_offset[i],
                       cfg->rx_fifo_queues[i].dc_start_addr & 0xFFFFFFFCU);
       }
@@ -832,6 +858,12 @@ static enum can_error can_start_prt(uint32_t base, uint32_t timeout) {
   return CAN_ERROR_TIMEOUT;
 }
 
+/*
+ * TODO VERIFICATION: Reference (xcand_mh_rx_fifo_start) checks:
+ *   1. MH must be STARTED (xcand_mh_is_started) before starting FIFO
+ *   2. FIFO must be ENABLED (RX_FQ_CTRL2.ENABLE) before starting
+ *   3. Only then write START bit to RX_FQ_CTRL0
+ */
 static enum can_error can_start_rx_fifo_queues(uint32_t base,
                                                const struct can_config *cfg) {
   uint32_t enable_mask = 0U;
@@ -971,6 +1003,15 @@ enum can_error can_tx_fifo_push(uint32_t base_addr, uint8_t fifo_id,
  * @xl: True for CAN XL frame
  * @brs: Bit Rate Switch
  * @remote: True for remote frame
+ *
+ * TODO VERIFICATION: Reference (xcand_mh_tx_fifo_enqueue_msg) differences:
+ *   1. VALID bit in ELEM0 must be written LAST (after all other desc fields)
+ *      - Prepare ELEM0 in local variable with VALID=1
+ *      - Write ELEM1-7 to SMEM first
+ *      - Write ELEM0 as final step (marks descriptor as valid for MH)
+ *   2. Reference checks TX FIFO full by reading VALID bit in current desc
+ *   3. Reference maintains software put_index and rolling_counter
+ *   4. Reference updates desc_array_at_put_index_p pointer after enqueue
  *
  * Return: enum can_error code
  */
@@ -1112,6 +1153,12 @@ enum can_error can_tx_fifo_push_ext(uint32_t base_addr, uint8_t fifo_id,
  * @xl: True for CAN XL
  * @brs: Bit Rate Switch
  *
+ * TODO VERIFICATION: Reference (xcand_mh_tx_priority_queue_enqueue_msg):
+ *   1. Checks slot busy via TX_PQ_STS0 BUSY bit - SAME as current
+ *   2. VALID bit in ELEM0 must be written LAST
+ *   3. Reference sets PQ=1 and PQSN (slot number) correctly in ELEM0
+ *   4. Data container address from pre-allocated slot[slot].dc_start_addr
+ *
  * Return: enum can_error code
  */
 enum can_error can_tx_priority_slot(uint32_t base_addr, uint8_t slot_id,
@@ -1214,6 +1261,13 @@ enum can_error can_tx_priority_slot(uint32_t base_addr, uint8_t slot_id,
  * @base_addr: CAN controller base address
  * @fifo_id: TX FIFO queue index (0-7)
  *
+ * TODO VERIFICATION: Reference (xcand_mh_tx_fifo_abort) uses 4-step process:
+ *   1. Write MH_LOCK unlock sequence (0x1234, 0x4321) BEFORE setting ABORT
+ *   2. Set ABORT bit in TX_FQ_CTRL1
+ *   3. Wait for BUSY=0 AND STOP=0
+ *   4. Unlock again, then clear ABORT bit, then disable queue
+ *   Currently missing: MH_LOCK unlock sequence before ABORT write
+ *
  * Return: enum can_error code
  */
 enum can_error can_tx_abort(uint32_t base_addr, uint8_t fifo_id) {
@@ -1222,6 +1276,11 @@ enum can_error can_tx_abort(uint32_t base_addr, uint8_t fifo_id) {
 
   if (fifo_id >= CAN_TX_FIFO_QUEUE_COUNT)
     return CAN_ERROR_INVALID_PARAM;
+
+  /* TODO: Add MH_LOCK unlock sequence:
+   * CAN_WRITE_REG(base_addr, CAN_MH_LOCK_OFFSET, CAN_MH_LOCK_ULK_KEY1);
+   * CAN_WRITE_REG(base_addr, CAN_MH_LOCK_OFFSET, CAN_MH_LOCK_ULK_KEY2);
+   */
 
   reg_val = CAN_READ_REG(base_addr, CAN_MH_TX_FQ_CTRL1_OFFSET);
   reg_val |= (1U << fifo_id);
@@ -1253,6 +1312,12 @@ enum can_error can_tx_abort(uint32_t base_addr, uint8_t fifo_id) {
  * @base_addr: CAN controller base address
  * @slot_id: TX Priority Queue slot (0-31)
  *
+ * TODO VERIFICATION: Reference (xcand_mh_tx_priority_queue_slot_abort) requires:
+ *   1. MH_LOCK unlock sequence (0x1234, 0x4321) BEFORE setting ABORT
+ *   2. Wait for ALL BUSY bits = 0 (not just specific slot)
+ *   3. Unlock again, clear ABORT, then disable ALL slots
+ *   Currently missing: MH_LOCK unlock sequence
+ *
  * Return: enum can_error code
  */
 enum can_error can_tx_priority_abort(uint32_t base_addr, uint8_t slot_id) {
@@ -1261,6 +1326,11 @@ enum can_error can_tx_priority_abort(uint32_t base_addr, uint8_t slot_id) {
 
   if (slot_id >= CAN_TX_PQ_SLOT_COUNT)
     return CAN_ERROR_INVALID_PARAM;
+
+  /* TODO: Add MH_LOCK unlock sequence:
+   * CAN_WRITE_REG(base_addr, CAN_MH_LOCK_OFFSET, CAN_MH_LOCK_ULK_KEY1);
+   * CAN_WRITE_REG(base_addr, CAN_MH_LOCK_OFFSET, CAN_MH_LOCK_ULK_KEY2);
+   */
 
   reg_val = CAN_READ_REG(base_addr, CAN_MH_TX_PQ_CTRL1_OFFSET);
   reg_val |= (1U << slot_id);
@@ -1452,6 +1522,14 @@ enum can_error can_rx_fifo_setup_continuous(uint32_t base_addr, uint8_t fifo_id,
  * @msg: Pointer to message structure to fill
  * @timeout_us: Timeout in microseconds (0 = non-blocking)
  *
+ * TODO VERIFICATION: Reference (xcand_mh_rx_fifo_dequeue_msg) differences:
+ *   1. Reference maintains software get_index to track current read position
+ *   2. Reference maintains rolling_counter for descriptor validation
+ *   3. Reference checks HD (head descriptor) and FQN fields in ELEM0
+ *   4. Reference parses R0/R1 from data container (not just descriptor)
+ *   5. After dequeue: update get_index, rolling_counter, call rx_fifo_start()
+ *   6. For Continuous Mode: update RX_FQ_RD_ADD_PT with last data word addr
+ *
  * Return: enum can_error code
  */
 enum can_error can_rx_read(uint32_t base_addr, uint8_t fifo_id,
@@ -1580,6 +1658,11 @@ enum can_error can_rx_has_message(uint32_t base_addr, uint8_t fifo_id,
  * can_rx_restart - Restart RX FIFO queue
  * @base_addr: CAN controller base address
  * @fifo_id: RX FIFO queue index (0-7)
+ *
+ * TODO VERIFICATION: Reference (xcand_mh_rx_fifo_start) checks:
+ *   1. MH must be STARTED before starting FIFO
+ *   2. FIFO must be ENABLED before writing START
+ *   Current implementation checks both - OK
  */
 void can_rx_restart(uint32_t base_addr, uint8_t fifo_id) {
   uint32_t reg_val;
@@ -1607,6 +1690,12 @@ void can_rx_restart(uint32_t base_addr, uint8_t fifo_id) {
  * @base_addr: CAN controller base address
  * @fifo_id: RX FIFO queue index (0-7)
  *
+ * TODO VERIFICATION: Reference (xcand_mh_rx_fifo_abort) requires:
+ *   1. MH_LOCK unlock sequence (0x1234, 0x4321) BEFORE setting ABORT
+ *   2. Wait for BUSY=0 AND STOP=0
+ *   3. Unlock again, clear ABORT bit, then disable queue
+ *   Currently missing: MH_LOCK unlock sequence
+ *
  * Return: enum can_error code
  */
 enum can_error can_rx_abort(uint32_t base_addr, uint8_t fifo_id) {
@@ -1615,6 +1704,11 @@ enum can_error can_rx_abort(uint32_t base_addr, uint8_t fifo_id) {
 
   if (fifo_id >= CAN_RX_FIFO_QUEUE_COUNT)
     return CAN_ERROR_INVALID_PARAM;
+
+  /* TODO: Add MH_LOCK unlock sequence:
+   * CAN_WRITE_REG(base_addr, CAN_MH_LOCK_OFFSET, CAN_MH_LOCK_ULK_KEY1);
+   * CAN_WRITE_REG(base_addr, CAN_MH_LOCK_OFFSET, CAN_MH_LOCK_ULK_KEY2);
+   */
 
   reg_val = CAN_READ_REG(base_addr, CAN_MH_RX_FQ_CTRL1_OFFSET);
   reg_val |= (1U << fifo_id);
@@ -1780,6 +1874,17 @@ can_register_callbacks(uint32_t base_addr,
  * @base_addr: CAN controller base address
  *
  * Main IRQ handler - reads IRC status, clears interrupts, dispatches callbacks.
+ *
+ * TODO VERIFICATION: Reference (xcand_process_irq_func/err/safety) differences:
+ *   1. Reference clears each IR flag BEFORE processing its event
+ *      - Strategy: Clear first, then process, to avoid missing interrupts
+ *      - Current: Clears ALL flags at once before processing any
+ *   2. Reference reads FUNC_ENA to mask active vs enabled interrupts
+ *   3. Reference handles TX FIFO UNVALID interrupt specially:
+ *      - Checks TX_FQ_INT_STS.UNVALID bit
+ *      - Re-reads TX_FQ_ADD_PT to find stopped descriptor
+ *      - If VALID=1 in that desc, calls tx_fifo_start() again
+ *   4. Reference updates PRT status (TEC/REC) in every IRQ handler call
  */
 void can_irq_handler(uint32_t base_addr) {
   uint32_t func_raw, err_raw, safety_raw, prt_stat, prt_evnt;
@@ -1791,6 +1896,11 @@ void can_irq_handler(uint32_t base_addr) {
   err_raw = CAN_READ_REG(base_addr, CAN_IRC_ERR_RAW_OFFSET);
   safety_raw = CAN_READ_REG(base_addr, CAN_IRC_SAFETY_RAW_OFFSET);
 
+  /*
+   * TODO: Reference clears flags BEFORE processing each event.
+   * Currently clearing all at once - may miss interrupts that occur
+   * between clear and processing.
+   */
   /* Clear interrupts */
   if (func_raw)
     CAN_WRITE_REG(base_addr, CAN_IRC_FUNC_CLR_OFFSET, func_raw);
