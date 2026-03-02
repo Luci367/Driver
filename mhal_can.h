@@ -202,20 +202,59 @@ typedef struct {
 } Can_ControllerFdBaudrateCfgType;
 
 /*---------------------------------------------------------------------------*/
+/* XL Bit Timing Configuration                                               */
+/*---------------------------------------------------------------------------*/
+
+typedef struct {
+  uint8 CanControllerXlPropSeg;       /* Propagation segment */
+  uint8 CanControllerXlSeg1;          /* Phase segment 1 */
+  uint8 CanControllerXlSeg2;          /* Phase segment 2 */
+  uint8 CanControllerXlSyncJumpWidth; /* Sync jump width */
+  uint16 CanControllerXlTdcOffset;    /* Transmitter Delay Compensation offset */
+} Can_ControllerXlBaudrateCfgType;
+
+/*---------------------------------------------------------------------------*/
+/* PWME Configuration (XL pulse-width modulation)                            */
+/*---------------------------------------------------------------------------*/
+
+typedef struct {
+  uint16 Pwmo; /* PWME offset */
+  uint16 Pwms; /* PWME sample */
+  uint16 Pwml; /* PWME level */
+} Can_ControllerPwmeCfgType;
+
+/*---------------------------------------------------------------------------*/
 /* Controller Configuration                                                  */
 /*---------------------------------------------------------------------------*/
 
 typedef struct {
   uint8 ControllerId;    /* Controller index */
-  uint32 BaseAddress;    /* Register base address */
+  uint32 BaseAddress;    /* XCAN instance register base address */
   uint32 ClockFrequency; /* CAN clock frequency */
   P2CONST(Can_ControllerBaudrateCfgType, AUTOMATIC, CAN_CONST) BaudrateCfg;
   P2CONST(Can_ControllerFdBaudrateCfgType, AUTOMATIC, CAN_CONST)
   CanControllerFdBaudrateConfig;
+  P2CONST(Can_ControllerXlBaudrateCfgType, AUTOMATIC, CAN_CONST)
+  CanControllerXlBaudrateConfig;
+  P2CONST(Can_ControllerPwmeCfgType, AUTOMATIC, CAN_CONST) CanControllerPwmeConfig;
   uint8 BaudrateCfgCount;   /* Number of baud rate configs */
   uint8 DefaultBaudrateIdx; /* Default baud rate index */
   boolean XlEnable;         /* XL support enable */
   /* FD is enabled if CanControllerFdBaudrateConfig != NULL */
+
+  /* XCAN-specific hardware config */
+  uint32 LmemBaseAddress;    /* Local Memory base address */
+  uint32 LmemSizeWords;      /* Local Memory size in 32-bit words */
+  uint8 RetransMax;          /* Max retransmissions (0=fire-and-forget, 7=unlimited) */
+  boolean RxContinuousMode;  /* RX FIFO continuous DC mode */
+  uint32 IrcFuncEnaMask;     /* IRC functional interrupt enable mask */
+  uint32 IrcErrEnaMask;      /* IRC error interrupt enable mask */
+  uint32 IrcSafetyEnaMask;   /* IRC safety interrupt enable mask */
+  uint32 LmemFqBase;         /* TX FIFO descriptor base offset in LMEM */
+  uint32 LmemPqBase;         /* TX PQ descriptor base offset in LMEM */
+  uint32 LmemRxFilterBase;   /* RX filter element base offset in LMEM */
+  uint8 TxPqNumSlots;        /* Number of TX Priority Queue slots (0 = disabled) */
+  uint32 TxPqDescArrayAddr;  /* System memory address for TX PQ descriptors */
 } Can_ControllerType;
 
 /*---------------------------------------------------------------------------*/
@@ -232,6 +271,12 @@ typedef struct {
   boolean PollingMode;                     /* Polling or interrupt */
   Can_ObjectPLType CanObjectPayloadLength; /* Payload length (FD if >8) */
   uint8 CanFdPaddingValue;                 /* FD frame padding value */
+
+  /* XCAN FIFO memory configuration (provided by integrator) */
+  uint32 DescArrayAddr;  /* System memory address for descriptor array */
+  uint32 DcStartAddr;    /* System memory address for data containers */
+  uint32 DcSizeWord;     /* Data container size per message (in 32-bit words) */
+  uint32 FifoSize;       /* Number of descriptors in this FIFO */
 } Can_HardwareObjectType;
 
 /*---------------------------------------------------------------------------*/
@@ -389,6 +434,24 @@ can_hal_get_controller_error_state(VAR(uint8, AUTOMATIC) cid,
                                          CAN_APPL_DATA) ErrorStatePtr);
 
 /******************************************************************************
+ *  Function    : can_hal_get_rx_error_count
+ *  Description : Get receive error counter value.
+ *  Parameters  : cid - Controller ID
+ *  Return      : Current REC value (uint8)
+ *****************************************************************************/
+FUNC(uint8, CAN_CODE)
+can_hal_get_rx_error_count(VAR(uint8, AUTOMATIC) cid);
+
+/******************************************************************************
+ *  Function    : can_hal_get_tx_error_count
+ *  Description : Get transmit error counter value.
+ *  Parameters  : cid - Controller ID
+ *  Return      : Current TEC value (uint8)
+ *****************************************************************************/
+FUNC(uint8, CAN_CODE)
+can_hal_get_tx_error_count(VAR(uint8, AUTOMATIC) cid);
+
+/******************************************************************************
  *  Function    : can_hal_set_baudrate
  *  Description : Set controller baud rate. Controller must be STOPPED.
  *  Parameters  : cid - Controller ID
@@ -451,30 +514,14 @@ canxl_hal_get_controller_mode(VAR(uint8, AUTOMATIC) cid,
                                     CANXL_APPL_CONST) CtrlModePtr);
 
 /******************************************************************************
- *  Function    : canxl_hal_transmit
- *  Description : Trigger XL frame transmission from buffer.
- *  Parameters  : cid - Controller ID
- *                BufIdx - Buffer index
- *                FrameType - Frame type
- *  Return      : E_OK on success
- *****************************************************************************/
-FUNC(Std_ReturnType, CANXL_CODE)
-canxl_hal_transmit(VAR(uint8, AUTOMATIC) cid, VAR(uint16, AUTOMATIC) BufIdx,
-                   VAR(uint16, AUTOMATIC) FrameType);
-
-/* NOTE: canxl_hal_enable_egress_timestamp not supported - X_CAN IP always
- *       captures timestamps when HD bit is set in TX descriptor.
- *       No per-buffer enable/disable API exists. */
-
-/******************************************************************************
  *  Function    : canxl_hal_read
  *  Description : Read received CAN XL message.
- *  Parameters  : cid - Controller ID
+ *  Parameters  : Hrh - Hardware Receive Handle
  *                PduInfo - Output for XL message
- *  Return      : E_OK if message read
+ *  Return      : E_OK if message read, E_NOT_OK if empty/error
  *****************************************************************************/
 FUNC(Std_ReturnType, CANXL_CODE)
-canxl_hal_read(VAR(uint8, AUTOMATIC) cid,
+canxl_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
                P2VAR(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo);
 
 /******************************************************************************
