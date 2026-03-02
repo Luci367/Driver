@@ -1312,7 +1312,8 @@ enum can_error can_tx_abort(uint32_t base_addr, uint8_t fifo_id) {
  * @base_addr: CAN controller base address
  * @slot_id: TX Priority Queue slot (0-31)
  *
- * TODO VERIFICATION: Reference (xcand_mh_tx_priority_queue_slot_abort) requires:
+ * TODO VERIFICATION: Reference (xcand_mh_tx_priority_queue_slot_abort)
+ * requires:
  *   1. MH_LOCK unlock sequence (0x1234, 0x4321) BEFORE setting ABORT
  *   2. Wait for ALL BUSY bits = 0 (not just specific slot)
  *   3. Unlock again, clear ABORT, then disable ALL slots

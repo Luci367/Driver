@@ -82,7 +82,6 @@ typedef enum {
   CAN_CS_UNINIT = 0U,
   CAN_CS_STARTED,
   CAN_CS_STOPPED,
-  /* NOTE: CAN_CS_SLEEP not supported by X_CAN IP - no wakeup mechanism */
   CAN_CS_UNKNOWN
 } Can_ControllerStateType;
 
@@ -92,9 +91,7 @@ typedef enum {
 
 typedef enum {
   CAN_T_START = 0U,
-  CAN_T_STOP,
-  CAN_T_SLEEP,
-  CAN_T_WAKEUP
+  CAN_T_STOP
 } Can_StateTransitionType;
 
 /*---------------------------------------------------------------------------*/
@@ -312,7 +309,7 @@ FUNC(void, CAN_CODE) can_hal_deinit(VAR(uint8, AUTOMATIC) cid);
 
 /******************************************************************************
  *  Function    : can_hal_set_controller_mode
- *  Description : Set controller mode (start/stop/sleep/wakeup).
+ *  Description : Set controller mode (start/stop).
  *  Parameters  : cid - Controller ID
  *                Transition - Target state
  *  Return      : E_OK on success, E_NOT_OK on failure
@@ -379,9 +376,6 @@ can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) cid);
 FUNC(void, CAN_CODE)
 can_hal_disable_controller_interrupts(VAR(uint8, AUTOMATIC) cid);
 
-/* NOTE: can_hal_check_wakeup not supported - X_CAN IP has no wakeup mechanism
- */
-
 /******************************************************************************
  *  Function    : can_hal_get_controller_error_state
  *  Description : Get controller error state.
@@ -428,9 +422,6 @@ FUNC(void, CAN_CODE) can_hal_main_function_write(VAR(uint8, AUTOMATIC) cid);
  *  Return      : void
  *****************************************************************************/
 FUNC(void, CAN_CODE) can_hal_main_function_busoff(VAR(uint8, AUTOMATIC) cid);
-
-/* NOTE: can_hal_main_function_wakeup not supported - X_CAN IP has no wakeup
- * mechanism */
 
 /******************************************************************************
  *  HAL FUNCTION PROTOTYPES - CAN XL
