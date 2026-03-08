@@ -13,6 +13,7 @@
  */
 
 #include "mhcl_can.h"
+#include "can_debug.h"
 
 /* =========================================================================
  * Internal helpers
@@ -148,6 +149,9 @@ Mhcl_Can_ReturnType mhcl_can_init(Mhcl_Can_ControllerType *ctrl,
                                     const Mhcl_Can_ConfigType *config)
 {
     uint32_t i, j;
+
+    CAN_DBG_INFO(DBG_HCL, "init inst=%u base=0x%08X lmem=0x%08X",
+                 config->instance_id, config->xcan_base_addr, config->lmem_base);
 
     /* --- Step 1: Compute sub-module base addresses --- */
     ctrl->mh_base   = config->xcan_base_addr + XCAN_MH_OFFSET;
@@ -404,12 +408,15 @@ Mhcl_Can_ReturnType mhcl_can_init(Mhcl_Can_ControllerType *ctrl,
     mhdl_can_prt_start(ctrl->prt_base);
 
     ctrl->initialized = true;
+    CAN_DBG_INFO(DBG_HCL, "init complete inst=%u", ctrl->instance_id);
     return MHCL_CAN_OK;
 }
 
 Mhcl_Can_ReturnType mhcl_can_deinit(Mhcl_Can_ControllerType *ctrl)
 {
     uint32_t i;
+
+    CAN_DBG_INFO(DBG_HCL, "deinit inst=%u", ctrl->instance_id);
 
     /* Step 1: PRT stop (normal) */
     mhdl_can_prt_stop(ctrl->prt_base, false);
@@ -455,6 +462,7 @@ Mhcl_Can_ReturnType mhcl_can_deinit(Mhcl_Can_ControllerType *ctrl)
 
 Mhcl_Can_ReturnType mhcl_can_start(Mhcl_Can_ControllerType *ctrl)
 {
+    CAN_DBG_INFO(DBG_HCL, "start inst=%u", ctrl->instance_id);
     mhdl_can_prt_start(ctrl->prt_base);
 
     /* Wait for bus integration (ACT != INACTIVE) */
@@ -468,6 +476,8 @@ Mhcl_Can_ReturnType mhcl_can_start(Mhcl_Can_ControllerType *ctrl)
 Mhcl_Can_ReturnType mhcl_can_stop(Mhcl_Can_ControllerType *ctrl)
 {
     uint32_t i;
+
+    CAN_DBG_INFO(DBG_HCL, "stop inst=%u", ctrl->instance_id);
 
     /* PRT stop (normal) */
     mhdl_can_prt_stop(ctrl->prt_base, false);
@@ -526,8 +536,12 @@ int mhcl_can_tx_fifo_enqueue(Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id,
 {
     Mhcl_Can_TxFifoState *ts = &ctrl->tx_fifo[fifo_id];
 
+    CAN_DBG_VERB(DBG_HCL, "tx_enq fifo=%u ff=%u id=0x%08X dlc=%u",
+                 fifo_id, msg->frame_format, msg->frame_id, msg->dlc);
+
     /* Step 1: Check if full */
     if (mhcl_can_tx_fifo_is_full(ctrl, fifo_id)) {
+        CAN_DBG_WARN(DBG_HCL, "tx_enq fifo=%u FULL", fifo_id);
         return 0;
     }
 
@@ -628,8 +642,12 @@ int mhcl_can_tx_fifo_enqueue(Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id,
 int mhcl_can_tx_pq_enqueue(Mhcl_Can_ControllerType *ctrl, uint32_t slot_id,
                              const Mhcl_Can_MsgType *msg)
 {
+    CAN_DBG_VERB(DBG_HCL, "tx_pq_enq slot=%u ff=%u id=0x%08X dlc=%u",
+                 slot_id, msg->frame_format, msg->frame_id, msg->dlc);
+
     /* Step 1: Check busy */
     if (mhcl_can_tx_pq_is_busy(ctrl, slot_id)) {
+        CAN_DBG_WARN(DBG_HCL, "tx_pq_enq slot=%u BUSY", slot_id);
         return 0;
     }
 
@@ -721,8 +739,22 @@ bool mhcl_can_tx_pq_is_busy(const Mhcl_Can_ControllerType *ctrl,
     return ((sts0 & MHDL_BIT(slot_id)) != 0u);
 }
 
+bool mhcl_can_tx_fifo_check_sent(Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id)
+{
+    uint32_t int_sts = mhdl_can_mh_tx_fifo_get_int_status(ctrl->mh_base);
+    uint32_t sent_bit = MHDL_BIT(fifo_id) << XCAND_MH_CREG_TX_FQ_INT_STS_SENT_SHIFT;
+
+    if ((int_sts & sent_bit) != 0u) {
+        mhdl_can_mh_tx_fifo_clear_int(ctrl->mh_base, sent_bit);
+        CAN_DBG_VERB(DBG_HCL, "tx_fifo_check_sent fifo=%u SENT", fifo_id);
+        return true;
+    }
+    return false;
+}
+
 void mhcl_can_tx_fifo_abort(Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id)
 {
+    CAN_DBG_INFO(DBG_HCL, "tx_fifo_abort fifo=%u", fifo_id);
     mhdl_can_mh_tx_fifo_abort(ctrl->mh_base, fifo_id);
     ctrl->tx_fifo[fifo_id].enabled = false;
 }
@@ -752,6 +784,8 @@ int mhcl_can_rx_fifo_dequeue(Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id,
     if (mhcl_can_rx_fifo_is_empty(ctrl, fifo_id)) {
         return 0;
     }
+
+    CAN_DBG_VERB(DBG_HCL, "rx_deq fifo=%u get_idx=%u", fifo_id, rs->get_index);
 
     /* Clear output structure */
     memset(msg, 0, sizeof(Mhcl_Can_MsgType));
@@ -870,6 +904,9 @@ int mhcl_can_rx_fifo_dequeue(Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id,
     rs->rolling_counter++;
     rs->rolling_counter &= MHCL_CAN_RC_MASK;
 
+    CAN_DBG_VERB(DBG_HCL, "rx_deq fifo=%u ff=%u id=0x%08X dlc=%u",
+                 fifo_id, msg->frame_format, msg->frame_id, msg->dlc);
+
     return 1;
 }
 
@@ -887,6 +924,7 @@ bool mhcl_can_rx_fifo_is_empty(const Mhcl_Can_ControllerType *ctrl,
 
 void mhcl_can_rx_fifo_abort(Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id)
 {
+    CAN_DBG_INFO(DBG_HCL, "rx_fifo_abort fifo=%u", fifo_id);
     mhdl_can_mh_rx_fifo_abort(ctrl->mh_base, fifo_id);
     ctrl->rx_fifo[fifo_id].enabled = false;
 }
@@ -903,6 +941,7 @@ Mhcl_Can_ReturnType mhcl_can_set_baudrate(Mhcl_Can_ControllerType *ctrl,
                                             const Mhcl_Can_PwmeType *pwme,
                                             const Mhcl_Can_PrtModeType *mode)
 {
+    CAN_DBG_INFO(DBG_HCL, "set_baudrate inst=%u brp=%u", ctrl->instance_id, brp);
     bool was_started = mhdl_can_prt_is_started(ctrl->prt_base);
 
     if (was_started) {
@@ -1002,6 +1041,8 @@ void mhcl_can_enable_interrupts(Mhcl_Can_ControllerType *ctrl,
                                  uint32_t func_mask, uint32_t err_mask,
                                  uint32_t safety_mask)
 {
+    CAN_DBG_INFO(DBG_HCL, "enable_irq func=0x%08X err=0x%08X safety=0x%08X",
+                 func_mask, err_mask, safety_mask);
     mhdl_can_irc_set_func_ena(ctrl->irc_base, func_mask);
     mhdl_can_irc_set_err_ena(ctrl->irc_base, err_mask);
     mhdl_can_irc_set_safety_ena(ctrl->irc_base, safety_mask);
@@ -1009,6 +1050,7 @@ void mhcl_can_enable_interrupts(Mhcl_Can_ControllerType *ctrl,
 
 void mhcl_can_disable_interrupts(Mhcl_Can_ControllerType *ctrl)
 {
+    CAN_DBG_INFO(DBG_HCL, "disable_irq inst=%u", ctrl->instance_id);
     mhdl_can_irc_set_func_ena(ctrl->irc_base, 0u);
     mhdl_can_irc_set_err_ena(ctrl->irc_base, 0u);
     mhdl_can_irc_set_safety_ena(ctrl->irc_base, 0u);
@@ -1030,6 +1072,8 @@ void mhcl_can_process_irq_func(Mhcl_Can_ControllerType *ctrl)
     if (active == 0u) {
         return;
     }
+
+    CAN_DBG_VERB(DBG_HCL, "irq_func active=0x%08X", active);
 
     /* --- TX FIFO Queue interrupts (bits 0-7) --- */
     for (uint32_t fq = 0u; fq < MHCL_CAN_MAX_TX_FIFO; fq++) {
@@ -1152,6 +1196,8 @@ void mhcl_can_process_irq_err(Mhcl_Can_ControllerType *ctrl)
         return;
     }
 
+    CAN_DBG_WARN(DBG_HCL, "irq_err active=0x%08X", active);
+
     /* MH Descriptor Error */
     if ((active & CONTROL_ERR_CLR_MH_DESC_ERR_MASK) != 0u) {
         mhdl_can_irc_clear_err(ctrl->irc_base, CONTROL_ERR_CLR_MH_DESC_ERR_MASK);
@@ -1175,6 +1221,7 @@ void mhcl_can_process_irq_err(Mhcl_Can_ControllerType *ctrl)
         mhdl_can_irc_clear_err(ctrl->irc_base, CONTROL_ERR_CLR_PRT_E_PASSIVE_MASK);
         active &= ~CONTROL_ERR_CLR_PRT_E_PASSIVE_MASK;
 
+        CAN_DBG_WARN(DBG_HCL, "Error Passive inst=%u", ctrl->instance_id);
         if (ctrl->cb_error_passive != NULL) {
             ctrl->cb_error_passive(ctrl->instance_id);
         }
@@ -1185,6 +1232,7 @@ void mhcl_can_process_irq_err(Mhcl_Can_ControllerType *ctrl)
         mhdl_can_irc_clear_err(ctrl->irc_base, CONTROL_ERR_CLR_PRT_BUS_OFF_MASK);
         active &= ~CONTROL_ERR_CLR_PRT_BUS_OFF_MASK;
 
+        CAN_DBG_ERR(DBG_HCL, "BUS OFF detected inst=%u", ctrl->instance_id);
         if (ctrl->cb_busoff != NULL) {
             ctrl->cb_busoff(ctrl->instance_id);
         }
@@ -1210,6 +1258,8 @@ void mhcl_can_process_irq_safety(Mhcl_Can_ControllerType *ctrl)
     if (active == 0u) {
         return;
     }
+
+    CAN_DBG_ERR(DBG_HCL, "irq_safety active=0x%08X", active);
 
     /* MH Memory Safety Error */
     if ((active & CONTROL_SAFETY_CLR_MH_MEM_SFTY_ERR_MASK) != 0u) {

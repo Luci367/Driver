@@ -365,6 +365,10 @@ int mhcl_can_tx_pq_enqueue(Mhcl_Can_ControllerType *ctrl, uint32_t slot_id,
 /* Check if TX FIFO is full (VALID bit of current put-index descriptor). */
 bool mhcl_can_tx_fifo_is_full(const Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id);
 
+/* Check and clear TX FIFO SENT status for a specific FIFO.
+ * Returns true if the FIFO had a completed transmission. */
+bool mhcl_can_tx_fifo_check_sent(Mhcl_Can_ControllerType *ctrl, uint32_t fifo_id);
+
 /* Check if TX PQ slot is busy (register-based). */
 bool mhcl_can_tx_pq_is_busy(const Mhcl_Can_ControllerType *ctrl, uint32_t slot_id);
 

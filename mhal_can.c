@@ -18,7 +18,9 @@
  *****************************************************************************/
 
 #include "mhal_can.h"
+#include "mhal_can_internal.h"
 #include "mhcl_can.h"
+#include "can_debug.h"
 #include <string.h>
 
 /******************************************************************************
@@ -231,6 +233,7 @@ static void hal_cb_error_active(uint8_t controller)
 FUNC(void, CAN_CODE)
 can_hal_set_config(P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) Config)
 {
+    CAN_DBG_INFO(DBG_HAL, "set_config cfg=%p", (const void *)Config);
     pCanHalCfg = Config;
 }
 
@@ -240,8 +243,15 @@ can_hal_set_config(P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) Config)
 
 FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
 {
-    if (pCanHalCfg == NULL_PTR)                  { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum)     { return; }
+    CAN_DBG_INFO(DBG_HAL, "init cid=%u", cid);
+    if (pCanHalCfg == NULL_PTR) {
+        CAN_DBG_ERR(DBG_HAL, "init failed: config NULL");
+        return;
+    }
+    if (cid >= pCanHalCfg->ControllerCfgNum) {
+        CAN_DBG_ERR(DBG_HAL, "init failed: cid=%u out of range", cid);
+        return;
+    }
 
     const Can_ControllerType *ctrlCfg = GET_CTRL_CFG(cid);
     CanCtrlStatus            *ctrlData = GET_CTRL_DATA(cid);
@@ -354,15 +364,46 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
         }
     }
 
-    /* --- RX filter: accept all by default (configurable via extended PB) --- */
-    hcl_cfg.rx_filter.num_elements         = 0u;
-    hcl_cfg.rx_filter.accept_non_matching  = true;
-    hcl_cfg.rx_filter.non_matching_fifo    = 0u;
-    hcl_cfg.rx_filter.accept_non_filtered  = true;
-    hcl_cfg.rx_filter.non_filtered_threshold = 0u;
-    hcl_cfg.rx_filter.elements     = NULL;
-    hcl_cfg.rx_filter.num_ref_pairs = 0u;
-    hcl_cfg.rx_filter.ref_pairs    = NULL;
+    /* --- RX filter config ---
+     * Build reference pairs from HW object filter configuration.
+     * If no filters are configured, default to accept-all. */
+    {
+        static Mhcl_Can_RxFilterRefPairType ref_pairs_buf[MHCL_CAN_MAX_RX_FIFO * 8u];
+        uint32 rp_count = 0u;
+        uint16 hoh;
+
+        for (hoh = 0u; hoh < pCanHalCfg->HwObjTxstartIdx; hoh++) {
+            const Can_HardwareObjectType *hwObj =
+                &pCanHalCfg->CanHardwareObject[hoh];
+            if (hwObj->CanControllerRef->ControllerId != cid) { continue; }
+            if (hwObj->CanObjectType != CAN_OBJECT_TYPE_RECEIVE) { continue; }
+            if (hwObj->CanHwFilter == NULL_PTR) { continue; }
+
+            uint8 fi;
+            for (fi = 0u; fi < hwObj->HwFilterCount; fi++) {
+                if (rp_count < (uint32)(sizeof(ref_pairs_buf) / sizeof(ref_pairs_buf[0]))) {
+                    ref_pairs_buf[rp_count].value = hwObj->CanHwFilter[fi].CanHwFilterCode;
+                    ref_pairs_buf[rp_count].mask  = hwObj->CanHwFilter[fi].CanHwFilterMask;
+                    rp_count++;
+                }
+            }
+        }
+
+        hcl_cfg.rx_filter.num_elements         = 0u;
+        hcl_cfg.rx_filter.elements             = NULL;
+        hcl_cfg.rx_filter.accept_non_matching  = true;
+        hcl_cfg.rx_filter.non_matching_fifo    = 0u;
+        hcl_cfg.rx_filter.accept_non_filtered  = true;
+        hcl_cfg.rx_filter.non_filtered_threshold = 0u;
+
+        if (rp_count > 0u) {
+            hcl_cfg.rx_filter.num_ref_pairs = rp_count;
+            hcl_cfg.rx_filter.ref_pairs     = ref_pairs_buf;
+        } else {
+            hcl_cfg.rx_filter.num_ref_pairs = 0u;
+            hcl_cfg.rx_filter.ref_pairs     = NULL;
+        }
+    }
 
     /* --- IRC --- */
     hcl_cfg.irc.func_ena_mask   = ctrlCfg->IrcFuncEnaMask;
@@ -372,6 +413,7 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
     /* ---- Call HCL init ---- */
     Mhcl_Can_ReturnType ret = mhcl_can_init(hclCtrl, &hcl_cfg);
     if (ret != MHCL_CAN_OK) {
+        CAN_DBG_ERR(DBG_HAL, "init cid=%u HCL failed", cid);
         ctrlData->CtrlState = CAN_CS_UNINIT;
         return;
     }
@@ -388,10 +430,12 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
     ctrlData->RefCounter = 0u;
     ctrlData->HthObjBusy = 0u;
     (void)memset(tx_pdu_handle[cid], 0, sizeof(tx_pdu_handle[cid]));
+    CAN_DBG_INFO(DBG_HAL, "init cid=%u OK, state=STOPPED", cid);
 }
 
 FUNC(void, CAN_CODE) can_hal_deinit(VAR(uint8, AUTOMATIC) cid)
 {
+    CAN_DBG_INFO(DBG_HAL, "deinit cid=%u", cid);
     if (pCanHalCfg == NULL_PTR)              { return; }
     if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
 
@@ -408,8 +452,9 @@ FUNC(void, CAN_CODE) can_hal_deinit(VAR(uint8, AUTOMATIC) cid)
 
 FUNC(Std_ReturnType, CAN_CODE)
 can_hal_set_controller_mode(VAR(uint8, AUTOMATIC) cid,
-                            VAR(Can_ControllerStateType, AUTOMATIC) Transition)
+                            VAR(Can_StateTransitionType, AUTOMATIC) Transition)
 {
+    CAN_DBG_INFO(DBG_HAL, "set_mode cid=%u transition=%u", cid, Transition);
     if (pCanHalCfg == NULL_PTR)              { return E_NOT_OK; }
     if (cid >= pCanHalCfg->ControllerCfgNum) { return E_NOT_OK; }
 
@@ -417,7 +462,7 @@ can_hal_set_controller_mode(VAR(uint8, AUTOMATIC) cid,
     Mhcl_Can_ReturnType  ret;
 
     switch (Transition) {
-    case CAN_CS_STARTED:
+    case CAN_T_START:
         if (ctrlData->CtrlState != CAN_CS_STOPPED) { return E_NOT_OK; }
         ret = mhcl_can_start(&mhcl_ctrl[cid]);
         if (ret != MHCL_CAN_OK) { return E_NOT_OK; }
@@ -425,7 +470,7 @@ can_hal_set_controller_mode(VAR(uint8, AUTOMATIC) cid,
         CanIf_ControllerModeIndication(cid, CAN_CS_STARTED);
         break;
 
-    case CAN_CS_STOPPED:
+    case CAN_T_STOP:
         if (ctrlData->CtrlState != CAN_CS_STARTED) { return E_NOT_OK; }
         ret = mhcl_can_stop(&mhcl_ctrl[cid]);
         if (ret != MHCL_CAN_OK) { return E_NOT_OK; }
@@ -460,12 +505,15 @@ can_hal_get_controller_mode(VAR(uint8, AUTOMATIC) cid,
 
 FUNC(Std_ReturnType, CAN_CODE)
 can_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
-              P2VAR(Can_PduType, AUTOMATIC, CAN_APPL_DATA) PduInfo)
+              P2CONST(Can_PduType, AUTOMATIC, CAN_APPL_DATA) PduInfo)
 {
     if (pCanHalCfg == NULL_PTR)           { return E_NOT_OK; }
     if (Hth >= pCanHalCfg->HwObjCfgNum)  { return E_NOT_OK; }
     if (PduInfo == NULL_PTR)              { return E_NOT_OK; }
     if (PduInfo->sdu == NULL_PTR)         { return E_NOT_OK; }
+
+    CAN_DBG_VERB(DBG_HAL, "write Hth=%u id=0x%08X len=%u",
+                 Hth, PduInfo->id, PduInfo->length);
 
     const Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hth];
     if (hwObj->CanObjectType != CAN_OBJECT_TYPE_TRANSMIT) { return E_NOT_OK; }
@@ -476,7 +524,10 @@ can_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
     /* Check if HTH is already occupied */
     uint8  hth_idx = hal_hth_local_idx(Hth);
     uint32 hth_bit = (uint32)1u << hth_idx;
-    if ((can_hd[cid].HthObjBusy & hth_bit) != 0u) { return CAN_BUSY_STD; }
+    if ((can_hd[cid].HthObjBusy & hth_bit) != 0u) {
+        CAN_DBG_WARN(DBG_HAL, "write Hth=%u BUSY", Hth);
+        return CAN_BUSY_STD;
+    }
 
     Mhcl_Can_FrameFormatType ff = hal_determine_ff(hwObj, PduInfo->id);
 
@@ -527,6 +578,7 @@ FUNC(Std_ReturnType, CAN_CODE)
 can_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
              P2VAR(Can_PduType, AUTOMATIC, CAN_APPL_DATA) PduInfo)
 {
+    CAN_DBG_VERB(DBG_HAL, "read Hrh=%u", Hrh);
     if (pCanHalCfg == NULL_PTR)           { return E_NOT_OK; }
     if (Hrh >= pCanHalCfg->HwObjCfgNum)  { return E_NOT_OK; }
     if (PduInfo == NULL_PTR)              { return E_NOT_OK; }
@@ -568,6 +620,7 @@ can_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
 FUNC(void, CAN_CODE)
 can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) cid)
 {
+    CAN_DBG_INFO(DBG_HAL, "enable_irq cid=%u", cid);
     if (pCanHalCfg == NULL_PTR)              { return; }
     if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
 
@@ -589,6 +642,7 @@ can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) cid)
 FUNC(void, CAN_CODE)
 can_hal_disable_controller_interrupts(VAR(uint8, AUTOMATIC) cid)
 {
+    CAN_DBG_INFO(DBG_HAL, "disable_irq cid=%u", cid);
     if (pCanHalCfg == NULL_PTR)              { return; }
     if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
 
@@ -642,17 +696,17 @@ can_hal_get_tx_error_count(VAR(uint8, AUTOMATIC) cid)
  *  Baudrate
  *****************************************************************************/
 
-FUNC(void, CAN_CODE)
+FUNC(Std_ReturnType, CAN_CODE)
 can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
                      VAR(uint16, AUTOMATIC) arb_baudrate)
 {
-    if (pCanHalCfg == NULL_PTR)              { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
-    if (can_hd[cid].CtrlState != CAN_CS_STOPPED) { return; }
+    CAN_DBG_INFO(DBG_HAL, "set_baudrate cid=%u br_id=%u", cid, arb_baudrate);
+    if (pCanHalCfg == NULL_PTR)              { return E_NOT_OK; }
+    if (cid >= pCanHalCfg->ControllerCfgNum) { return E_NOT_OK; }
+    if (can_hd[cid].CtrlState != CAN_CS_STOPPED) { return E_NOT_OK; }
 
     const Can_ControllerType *ctrlCfg = GET_CTRL_CFG(cid);
 
-    /* Look up baudrate config entry by BaudRateConfigId */
     const Can_ControllerBaudrateCfgType *nomCfg = NULL_PTR;
     uint8 i;
     for (i = 0u; i < ctrlCfg->BaudrateCfgCount; i++) {
@@ -661,7 +715,7 @@ can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
             break;
         }
     }
-    if (nomCfg == NULL_PTR) { return; }
+    if (nomCfg == NULL_PTR) { return E_NOT_OK; }
 
     /* Nominal */
     Mhcl_Can_BitTimingType nominal_bt;
@@ -716,10 +770,12 @@ can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
     mode_local.fd_ena = (ctrlCfg->CanControllerFdBaudrateConfig != NULL_PTR);
     mode_local.xl_ena = (ctrlCfg->XlEnable == TRUE);
 
-    (void)mhcl_can_set_baudrate(&mhcl_ctrl[cid],
-                                nomCfg->Prescaler,
-                                &nominal_bt, fd_bt_ptr, xl_bt_ptr,
-                                pwme_ptr, &mode_local);
+    Mhcl_Can_ReturnType br_ret = mhcl_can_set_baudrate(&mhcl_ctrl[cid],
+                                    nomCfg->Prescaler,
+                                    &nominal_bt, fd_bt_ptr, xl_bt_ptr,
+                                    pwme_ptr, &mode_local);
+
+    return (br_ret == MHCL_CAN_OK) ? E_OK : E_NOT_OK;
 }
 
 /******************************************************************************
@@ -780,14 +836,6 @@ FUNC(void, CAN_CODE) can_hal_main_function_write(VAR(uint8, AUTOMATIC) cid)
     if (can_hd[cid].CtrlState != CAN_CS_STARTED) { return; }
     if (can_hd[cid].HthObjBusy == 0u)       { return; }
 
-    /*
-     * Read the MH TX FIFO interrupt status once (contains SENT bits for
-     * each FIFO at bits [7:0]).  This status is set by MH hardware
-     * independently of the IRC enable mask, so it works in polling mode.
-     */
-    uint32_t int_sts =
-        mhdl_can_mh_tx_fifo_get_int_status(mhcl_ctrl[cid].mh_base);
-
     uint16 hoh;
     for (hoh = pCanHalCfg->HwObjTxstartIdx;
          hoh < pCanHalCfg->HwObjCfgNum; hoh++) {
@@ -804,13 +852,8 @@ FUNC(void, CAN_CODE) can_hal_main_function_write(VAR(uint8, AUTOMATIC) cid)
 
         if ((can_hd[cid].HthObjBusy & hth_bit) == 0u) { continue; }
 
-        uint32_t sent_bit =
-            MHDL_BIT(hwObj->HwFifoId) <<
-            XCAND_MH_CREG_TX_FQ_INT_STS_SENT_SHIFT;
-
-        if ((int_sts & sent_bit) != 0u) {
-            mhdl_can_mh_tx_fifo_clear_int(mhcl_ctrl[cid].mh_base, sent_bit);
-
+        if (mhcl_can_tx_fifo_check_sent(&mhcl_ctrl[cid],
+                                         (uint32_t)hwObj->HwFifoId)) {
             can_hd[cid].HthObjBusy &= ~hth_bit;
             CanIf_TxConfirmation(tx_pdu_handle[cid][hth_idx]);
         }
@@ -825,6 +868,7 @@ FUNC(void, CAN_CODE) can_hal_main_function_busoff(VAR(uint8, AUTOMATIC) cid)
 
     Mhcl_Can_ErrorStateType err = mhcl_can_get_error_state(&mhcl_ctrl[cid]);
     if (err == MHCL_CAN_ERR_BUSOFF) {
+        CAN_DBG_ERR(DBG_HAL, "busoff detected cid=%u", cid);
         can_hd[cid].CtrlState  = CAN_CS_STOPPED;
         can_hd[cid].HthObjBusy = 0u;
         CanIf_ControllerBusOff(cid);
@@ -839,6 +883,7 @@ FUNC(Std_ReturnType, CANXL_CODE)
 canxl_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
                 P2CONST(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo)
 {
+    CAN_DBG_VERB(DBG_HAL, "xl_write Hth=%u", Hth);
     if (pCanHalCfg == NULL_PTR)          { return E_NOT_OK; }
     if (Hth >= pCanHalCfg->HwObjCfgNum) { return E_NOT_OK; }
     if (PduInfo == NULL_PTR)             { return E_NOT_OK; }
@@ -899,6 +944,7 @@ FUNC(Std_ReturnType, CANXL_CODE)
 canxl_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
                P2VAR(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo)
 {
+    CAN_DBG_VERB(DBG_HAL, "xl_read Hrh=%u", Hrh);
     if (pCanHalCfg == NULL_PTR)           { return E_NOT_OK; }
     if (Hrh >= pCanHalCfg->HwObjCfgNum)  { return E_NOT_OK; }
     if (PduInfo == NULL_PTR)              { return E_NOT_OK; }
@@ -989,6 +1035,7 @@ can_hal_get_hrh_fd_info(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
 
 FUNC(void, CAN_CODE) can_hal_irq_handler(VAR(uint8, AUTOMATIC) cid)
 {
+    CAN_DBG_VERB(DBG_HAL, "irq_handler cid=%u", cid);
     if (pCanHalCfg == NULL_PTR)              { return; }
     if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
 

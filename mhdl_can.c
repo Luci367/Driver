@@ -14,6 +14,7 @@
  */
 
 #include "mhdl_can.h"
+#include "can_debug.h"
 
 /* *************************************************************************
  * PRT — Protocol Controller register operations
@@ -22,6 +23,8 @@
 void mhdl_can_prt_set_nbtp(uint32_t base, uint32_t brp, uint32_t tseg1,
                             uint32_t tseg2, uint32_t sjw)
 {
+    CAN_DBG_VERB(DBG_HDL, "NBTP brp=%u tseg1=%u tseg2=%u sjw=%u",
+                 brp, tseg1, tseg2, sjw);
     ConfigurationNbtpUt reg;
     reg.as_uint32   = 0u;
     reg.as_s.BrpU5  = brp;
@@ -34,6 +37,8 @@ void mhdl_can_prt_set_nbtp(uint32_t base, uint32_t brp, uint32_t tseg1,
 void mhdl_can_prt_set_dbtp(uint32_t base, uint32_t tseg1, uint32_t tseg2,
                             uint32_t sjw, uint32_t tdco)
 {
+    CAN_DBG_VERB(DBG_HDL, "DBTP tseg1=%u tseg2=%u sjw=%u tdco=%u",
+                 tseg1, tseg2, sjw, tdco);
     ConfigurationDbtpUt reg;
     reg.as_uint32     = 0u;
     reg.as_s.Dtseg1U8 = tseg1;
@@ -46,6 +51,8 @@ void mhdl_can_prt_set_dbtp(uint32_t base, uint32_t tseg1, uint32_t tseg2,
 void mhdl_can_prt_set_xbtp(uint32_t base, uint32_t tseg1, uint32_t tseg2,
                             uint32_t sjw, uint32_t tdco)
 {
+    CAN_DBG_VERB(DBG_HDL, "XBTP tseg1=%u tseg2=%u sjw=%u tdco=%u",
+                 tseg1, tseg2, sjw, tdco);
     ConfigurationXbtpUt reg;
     reg.as_uint32     = 0u;
     reg.as_s.Xtseg1U8 = tseg1;
@@ -61,6 +68,8 @@ void mhdl_can_prt_set_mode(uint32_t base, uint32_t fdoe, uint32_t xloe,
                             uint32_t sfs, uint32_t xltr, uint32_t efdi,
                             uint32_t fime)
 {
+    CAN_DBG_VERB(DBG_HDL, "MODE fdoe=%u xloe=%u tdce=%u pxhd=%u txp=%u sfs=%u",
+                 fdoe, xloe, tdce, pxhd, txp, sfs);
     ConfigurationModeUt reg;
     reg.as_uint32    = 0u;
     reg.as_s.FdoeU1  = fdoe;
@@ -91,11 +100,13 @@ void mhdl_can_prt_set_pwme(uint32_t base, uint32_t pwms, uint32_t pwml,
 
 void mhdl_can_prt_start(uint32_t base)
 {
+    CAN_DBG_INFO(DBG_HDL, "PRT start base=0x%08X", base);
     mhdl_can_reg_write(base, CONTROL_CTRL, CONTROL_CTRL_STRT_MASK);
 }
 
 void mhdl_can_prt_stop(uint32_t base, bool immediate)
 {
+    CAN_DBG_INFO(DBG_HDL, "PRT stop base=0x%08X immd=%u", base, immediate);
     /* Unlock sequence required before writing STOP to CTRL */
     mhdl_can_reg_write(base, CONTROL_LOCK, MHDL_PRT_LOCK_ULK_STOP_W1);
     mhdl_can_reg_write(base, CONTROL_LOCK, MHDL_PRT_LOCK_ULK_STOP_W2);
@@ -113,6 +124,7 @@ void mhdl_can_prt_stop(uint32_t base, bool immediate)
 
 void mhdl_can_prt_sw_reset(uint32_t base)
 {
+    CAN_DBG_INFO(DBG_HDL, "PRT sw_reset base=0x%08X", base);
     mhdl_can_reg_write(base, CONTROL_CTRL, CONTROL_CTRL_SRES_MASK);
 }
 
@@ -198,6 +210,7 @@ uint32_t mhdl_can_prt_get_event(uint32_t base)
 
 void mhdl_can_mh_start(uint32_t base)
 {
+    CAN_DBG_INFO(DBG_HDL, "MH start base=0x%08X", base);
     XcandmhcregMhctrlUt reg;
     reg.as_uint32    = 0u;
     reg.as_s.StartU1 = 1u;
@@ -206,6 +219,7 @@ void mhdl_can_mh_start(uint32_t base)
 
 void mhdl_can_mh_stop(uint32_t base)
 {
+    CAN_DBG_INFO(DBG_HDL, "MH stop base=0x%08X", base);
     XcandmhcregMhctrlUt reg;
     reg.as_uint32    = 0u;
     reg.as_s.StartU1 = 0u;
@@ -222,6 +236,8 @@ bool mhdl_can_mh_is_started(uint32_t base)
 void mhdl_can_mh_set_global_cfg(uint32_t base, uint32_t inst_num,
                                  uint32_t retrans_max, uint32_t rx_cont_mode)
 {
+    CAN_DBG_VERB(DBG_HDL, "MH cfg inst=%u retrans=%u rxcont=%u",
+                 inst_num, retrans_max, rx_cont_mode);
     XcandmhcregMhcfgUt reg;
     reg.as_uint32         = 0u;
     reg.as_s.InstnumU3    = inst_num;
@@ -259,6 +275,8 @@ void mhdl_can_mh_set_mem_addresses(uint32_t base, uint32_t fq_base,
 void mhdl_can_mh_set_tx_fifo_config(uint32_t base, uint32_t fifo,
                                      uint32_t start_addr, uint32_t max_desc)
 {
+    CAN_DBG_VERB(DBG_HDL, "TX FIFO%u cfg addr=0x%08X max=%u",
+                 fifo, start_addr, max_desc);
     uint32_t reg_block_offset = MHDL_MH_TX_FIFO_CFG_REG_BLOCK * fifo;
 
     /* TX_FQ_START_ADDn */
@@ -275,6 +293,7 @@ void mhdl_can_mh_set_tx_fifo_config(uint32_t base, uint32_t fifo,
 
 void mhdl_can_mh_tx_fifo_enable(uint32_t base, uint32_t fifo)
 {
+    CAN_DBG_VERB(DBG_HDL, "TX FIFO%u enable", fifo);
     XcandmhcregTxfqctrl2Ut reg;
     reg.as_uint32 = mhdl_can_reg_read(base, XCAND_MH_CREG_TX_FQ_CTRL2);
     reg.as_s.EnableU8 |= MHDL_BIT(fifo);
@@ -291,6 +310,7 @@ void mhdl_can_mh_tx_fifo_start(uint32_t base, uint32_t fifo)
 
 void mhdl_can_mh_tx_fifo_abort(uint32_t base, uint32_t fifo)
 {
+    CAN_DBG_INFO(DBG_HDL, "TX FIFO%u abort", fifo);
     XcandmhcregTxfqctrl1Ut ctrl1;
     XcandmhcregTxfqsts0Ut  sts0;
     XcandmhcregTxfqctrl2Ut ctrl2;
@@ -363,6 +383,7 @@ void mhdl_can_mh_tx_pq_start(uint32_t base, uint32_t slot)
 
 void mhdl_can_mh_tx_pq_abort(uint32_t base, uint32_t slot)
 {
+    CAN_DBG_INFO(DBG_HDL, "TX PQ slot%u abort", slot);
     XcandmhcregTxpqctrl1Ut ctrl1;
     XcandmhcregTxpqsts0Ut  sts0;
     XcandmhcregTxpqctrl2Ut ctrl2;
@@ -401,6 +422,8 @@ void mhdl_can_mh_set_rx_fifo_config(uint32_t base, uint32_t fifo,
                                      uint32_t dc_size_word, uint32_t dc_start,
                                      bool continuous_mode)
 {
+    CAN_DBG_VERB(DBG_HDL, "RX FIFO%u cfg addr=0x%08X max=%u dc_sz=%u cont=%u",
+                 fifo, start_addr, max_desc, dc_size_word, continuous_mode);
     uint32_t reg_block_offset = MHDL_MH_RX_FIFO_CFG_REG_BLOCK * fifo;
 
     /* RX_FQ_SIZEn — max descriptors + data container size (in 32-byte granularity) */
@@ -444,6 +467,7 @@ void mhdl_can_mh_rx_fifo_start(uint32_t base, uint32_t fifo)
 
 void mhdl_can_mh_rx_fifo_abort(uint32_t base, uint32_t fifo)
 {
+    CAN_DBG_INFO(DBG_HDL, "RX FIFO%u abort", fifo);
     XcandmhcregRxfqctrl1Ut ctrl1;
     XcandmhcregRxfqsts0Ut  sts0;
     XcandmhcregRxfqctrl2Ut ctrl2;
@@ -523,16 +547,19 @@ uint32_t mhdl_can_mh_get_status(uint32_t base)
 
 void mhdl_can_irc_set_func_ena(uint32_t base, uint32_t mask)
 {
+    CAN_DBG_VERB(DBG_HDL, "IRC func_ena=0x%08X", mask);
     mhdl_can_reg_write_verify(base, CONTROL_FUNC_ENA, mask);
 }
 
 void mhdl_can_irc_set_err_ena(uint32_t base, uint32_t mask)
 {
+    CAN_DBG_VERB(DBG_HDL, "IRC err_ena=0x%08X", mask);
     mhdl_can_reg_write_verify(base, CONTROL_ERR_ENA, mask);
 }
 
 void mhdl_can_irc_set_safety_ena(uint32_t base, uint32_t mask)
 {
+    CAN_DBG_VERB(DBG_HDL, "IRC safety_ena=0x%08X", mask);
     mhdl_can_reg_write_verify(base, CONTROL_SAFETY_ENA, mask);
 }
 

@@ -258,6 +258,15 @@ typedef struct {
 } Can_ControllerType;
 
 /*---------------------------------------------------------------------------*/
+/* Hardware Filter Type (for RX acceptance filtering)                         */
+/*---------------------------------------------------------------------------*/
+
+typedef struct {
+  uint32 CanHwFilterCode; /* Filter ID / acceptance code */
+  uint32 CanHwFilterMask; /* Filter mask */
+} Can_HwFilterType;
+
+/*---------------------------------------------------------------------------*/
 /* Hardware Object Configuration                                             */
 /*---------------------------------------------------------------------------*/
 
@@ -277,6 +286,10 @@ typedef struct {
   uint32 DcStartAddr;    /* System memory address for data containers */
   uint32 DcSizeWord;     /* Data container size per message (in 32-bit words) */
   uint32 FifoSize;       /* Number of descriptors in this FIFO */
+
+  /* RX filter configuration (only used for RX objects) */
+  uint8 HwFilterCount;
+  P2CONST(Can_HwFilterType, AUTOMATIC, CAN_CONST) CanHwFilter;
 } Can_HardwareObjectType;
 
 /*---------------------------------------------------------------------------*/
@@ -290,36 +303,6 @@ typedef struct {
   uint16 HwObjTxstartIdx; /* First TX HW object index */
   P2CONST(Can_HardwareObjectType, AUTOMATIC, CAN_CONST) CanHardwareObject;
 } Can_ConfigType;
-
-/*---------------------------------------------------------------------------*/
-/* Controller Status Type (HAL internal state)                               */
-/*---------------------------------------------------------------------------*/
-
-typedef struct {
-  Can_ControllerStateType CtrlState; /* Current controller state */
-  uint8 RefCounter;                  /* Reference counter */
-  uint32 HthObjBusy;                 /* HTH busy flags (bitmask) */
-} CanCtrlStatus;
-
-/*---------------------------------------------------------------------------*/
-/* HAL Configuration Count                                                   */
-/*---------------------------------------------------------------------------*/
-
-#define CAN_CTRL_CONFIG_CNT CAN_CONTROLLER_CNT
-
-/*---------------------------------------------------------------------------*/
-/* HAL State Access Macros                                                   */
-/*---------------------------------------------------------------------------*/
-
-/* Declared in mhal_can.c */
-extern VAR(CanCtrlStatus, CAN_VAR) can_hd[CAN_CTRL_CONFIG_CNT];
-extern P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) pCanHalCfg;
-
-/* Get controller state data */
-#define GET_CTRL_DATA(cid) (&can_hd[(cid)])
-
-/* Get controller config */
-#define GET_CTRL_CFG(cid) (&pCanHalCfg->CanController[(cid)])
 
 /******************************************************************************
  *  HAL FUNCTION PROTOTYPES - CLASSIC CAN
@@ -361,7 +344,7 @@ FUNC(void, CAN_CODE) can_hal_deinit(VAR(uint8, AUTOMATIC) cid);
  *****************************************************************************/
 FUNC(Std_ReturnType, CAN_CODE)
 can_hal_set_controller_mode(VAR(uint8, AUTOMATIC) cid,
-                            VAR(Can_ControllerStateType, AUTOMATIC) Transition);
+                            VAR(Can_StateTransitionType, AUTOMATIC) Transition);
 
 /******************************************************************************
  *  Function    : can_hal_get_controller_mode
@@ -388,7 +371,7 @@ can_hal_get_controller_mode(VAR(uint8, AUTOMATIC) cid,
  *****************************************************************************/
 FUNC(Std_ReturnType, CAN_CODE)
 can_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
-              P2VAR(Can_PduType, AUTOMATIC, CAN_APPL_DATA) PduInfo);
+              P2CONST(Can_PduType, AUTOMATIC, CAN_APPL_DATA) PduInfo);
 
 /******************************************************************************
  *  Function    : can_hal_read
@@ -458,7 +441,7 @@ can_hal_get_tx_error_count(VAR(uint8, AUTOMATIC) cid);
  *                arb_baudrate - Arbitration baud rate value
  *  Return      : void
  *****************************************************************************/
-FUNC(void, CAN_CODE)
+FUNC(Std_ReturnType, CAN_CODE)
 can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
                      VAR(uint16, AUTOMATIC) arb_baudrate);
 
