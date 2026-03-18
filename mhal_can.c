@@ -933,14 +933,6 @@ canxl_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
 }
 
 FUNC(Std_ReturnType, CANXL_CODE)
-canxl_hal_get_controller_mode(VAR(uint8, AUTOMATIC) cid,
-                              P2VAR(Can_ControllerStateType, AUTOMATIC,
-                                    CANXL_APPL_CONST) CtrlModePtr)
-{
-    return can_hal_get_controller_mode(cid, CtrlModePtr);
-}
-
-FUNC(Std_ReturnType, CANXL_CODE)
 canxl_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
                P2VAR(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo)
 {

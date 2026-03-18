@@ -485,18 +485,6 @@ canxl_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
                 P2CONST(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo);
 
 /******************************************************************************
- *  Function    : canxl_hal_get_controller_mode
- *  Description : Get CAN XL controller mode.
- *  Parameters  : cid - Controller ID
- *                CtrlModePtr - Output for mode
- *  Return      : E_OK on success
- *****************************************************************************/
-FUNC(Std_ReturnType, CANXL_CODE)
-canxl_hal_get_controller_mode(VAR(uint8, AUTOMATIC) cid,
-                              P2VAR(Can_ControllerStateType, AUTOMATIC,
-                                    CANXL_APPL_CONST) CtrlModePtr);
-
-/******************************************************************************
  *  Function    : canxl_hal_read
  *  Description : Read received CAN XL message.
  *  Parameters  : Hrh - Hardware Receive Handle
