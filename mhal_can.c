@@ -3,9 +3,12 @@
  *  Module: CAN MHAL (Hardware Abstraction Layer) — Implementation
  *
  *  AUTOSAR-compatible HAL layer for XCAN IP.
- *  Thin mapping layer: validates parameters, maps AUTOSAR types (HTH/HRH)
- *  to XCAN FIFO IDs via config lookup, converts PDU types, then delegates
- *  all hardware operations to HCL (mhcl_can).
+ *  Thin mapping layer: maps AUTOSAR types (HTH/HRH) to XCAN FIFO IDs via
+ *  config lookup, converts PDU types, then delegates all hardware operations
+ *  to HCL (mhcl_can).
+ *
+ *  Parameter validation is NOT performed here — it is the responsibility of
+ *  the MCAL layer that calls into this HAL.
  *
  *  Reference:
  *    - old_project/old_mhal_can.h  (API signatures, CanCtrlStatus)
@@ -29,7 +32,7 @@
 
 extern void CanIf_RxIndication(const Can_HwType *Mailbox,
                                const Can_PduType *PduInfoPtr);
-extern void CanIf_TxConfirmation(uint32 swPduHandle);
+extern void CanIf_TxConfirmation(PduIdType CanTxPduId);
 extern void CanIf_ControllerBusOff(uint8 ControllerId);
 extern void CanIf_ControllerModeIndication(uint8 ControllerId,
                                            Can_ControllerStateType ControllerMode);
@@ -38,19 +41,18 @@ extern void CanIf_ControllerModeIndication(uint8 ControllerId,
  *  Private defines
  *****************************************************************************/
 
-/* CAN_BUSY expressed as Std_ReturnType (AUTOSAR convention) */
 #define CAN_BUSY_STD   ((Std_ReturnType)0x02U)
 
 #define CAN_MAX_HTH_PER_CTRL  32u
 #define CAN_FD_MAX_SDU_BYTES  64u
 
 /******************************************************************************
- *  Global variables (extern'd in mhal_can.h)
+ *  Global variables (extern'd in mhal_can_internal.h)
  *****************************************************************************/
 
 VAR(CanCtrlStatus, CAN_VAR) can_hd[CAN_CTRL_CONFIG_CNT];
 
-P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) pCanHalCfg = NULL_PTR;
+P2CONST(Mhal_Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) pCanHalCfg = NULL_PTR;
 
 /******************************************************************************
  *  Module-private state
@@ -58,7 +60,7 @@ P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) pCanHalCfg = NULL_PTR;
 
 static Mhcl_Can_ControllerType mhcl_ctrl[CAN_CTRL_CONFIG_CNT];
 
-static uint32 tx_pdu_handle[CAN_CTRL_CONFIG_CNT][CAN_MAX_HTH_PER_CTRL];
+static PduIdType tx_pdu_handle[CAN_CTRL_CONFIG_CNT][CAN_MAX_HTH_PER_CTRL];
 
 /******************************************************************************
  *  Internal helpers
@@ -69,7 +71,6 @@ static uint8 hal_hth_local_idx(Can_HwHandleType Hth)
     return (uint8)(Hth - pCanHalCfg->HwObjTxstartIdx);
 }
 
-/* Copy SDU byte array into 32-bit word array (little-endian packing) */
 static void hal_sdu_to_data_words(const uint8 *sdu, uint32_t *data_word,
                                   uint32 length)
 {
@@ -84,7 +85,6 @@ static void hal_sdu_to_data_words(const uint8 *sdu, uint32_t *data_word,
     }
 }
 
-/* Copy 32-bit word array back to SDU byte array (little-endian) */
 static void hal_data_words_to_sdu(const uint32_t *data_word, uint8 *sdu,
                                   uint32 length)
 {
@@ -97,7 +97,6 @@ static void hal_data_words_to_sdu(const uint32_t *data_word, uint8 *sdu,
     }
 }
 
-/* Map HCL error state to AUTOSAR error state */
 static Can_ErrorStateType hal_map_error_state(Mhcl_Can_ErrorStateType hcl_err)
 {
     switch (hcl_err) {
@@ -108,17 +107,15 @@ static Can_ErrorStateType hal_map_error_state(Mhcl_Can_ErrorStateType hcl_err)
     }
 }
 
-/* Determine CC vs FD from HW object config and the CAN-ID FD mask */
 static Mhcl_Can_FrameFormatType hal_determine_ff(
-    const Can_HardwareObjectType *hwObj, uint32 canId)
+    const Mhal_Can_HardwareObjectType *hwObj, uint32 canId)
 {
-    if (IS_FD_FRAME(canId) || (hwObj->CanObjectPayloadLength > CAN_PL_8)) {
+    if (IS_FD_FRAME(canId) || (hwObj->CanObjectPayloadLength > MHAL_CAN_PL_8)) {
         return MHCL_CAN_FF_FD;
     }
     return MHCL_CAN_FF_CC;
 }
 
-/* Build a masked CAN ID + encode the FD / EXT flags for RX PDU output */
 static uint32 hal_build_rx_can_id(const Mhcl_Can_MsgType *msg)
 {
     uint32 canId;
@@ -151,11 +148,11 @@ static void hal_cb_tx_confirmation(uint8_t controller, uint32_t fifo_or_slot,
     for (hoh = pCanHalCfg->HwObjTxstartIdx;
          hoh < pCanHalCfg->HwObjCfgNum; hoh++) {
 
-        const Can_HardwareObjectType *hwObj =
+        const Mhal_Can_HardwareObjectType *hwObj =
             &pCanHalCfg->CanHardwareObject[hoh];
 
         if (hwObj->CanControllerRef->ControllerId != controller) { continue; }
-        if (hwObj->CanObjectType != CAN_OBJECT_TYPE_TRANSMIT)    { continue; }
+        if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_TRANSMIT)    { continue; }
         if ((uint32_t)hwObj->HwFifoId != fifo_or_slot)           { continue; }
 
         uint8 hth_idx = hal_hth_local_idx((Can_HwHandleType)hoh);
@@ -194,12 +191,11 @@ static void hal_cb_rx_indication(uint8_t controller, uint32_t fifo)
         hw.CanId        = pdu.id;
         hw.Hoh          = 0u;
 
-        /* Find the matching HRH for this controller + RX FIFO */
         for (uint16 hoh = 0u; hoh < pCanHalCfg->HwObjTxstartIdx; hoh++) {
-            const Can_HardwareObjectType *hwObj =
+            const Mhal_Can_HardwareObjectType *hwObj =
                 &pCanHalCfg->CanHardwareObject[hoh];
             if (hwObj->CanControllerRef->ControllerId != controller) { continue; }
-            if (hwObj->CanObjectType != CAN_OBJECT_TYPE_RECEIVE)     { continue; }
+            if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_RECEIVE)     { continue; }
             if ((uint32_t)hwObj->HwFifoId != fifo)                   { continue; }
             hw.Hoh = (Can_HwHandleType)hoh;
             break;
@@ -231,7 +227,8 @@ static void hal_cb_error_active(uint8_t controller)
  *****************************************************************************/
 
 FUNC(void, CAN_CODE)
-can_hal_set_config(P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) Config)
+can_hal_set_config(
+    P2CONST(Mhal_Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) Config)
 {
     CAN_DBG_INFO(DBG_HAL, "set_config cfg=%p", (const void *)Config);
     pCanHalCfg = Config;
@@ -244,18 +241,10 @@ can_hal_set_config(P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) Config)
 FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
 {
     CAN_DBG_INFO(DBG_HAL, "init cid=%u", cid);
-    if (pCanHalCfg == NULL_PTR) {
-        CAN_DBG_ERR(DBG_HAL, "init failed: config NULL");
-        return;
-    }
-    if (cid >= pCanHalCfg->ControllerCfgNum) {
-        CAN_DBG_ERR(DBG_HAL, "init failed: cid=%u out of range", cid);
-        return;
-    }
 
-    const Can_ControllerType *ctrlCfg = GET_CTRL_CFG(cid);
-    CanCtrlStatus            *ctrlData = GET_CTRL_DATA(cid);
-    Mhcl_Can_ControllerType  *hclCtrl = &mhcl_ctrl[cid];
+    const Mhal_Can_ControllerCfgType *ctrlCfg = GET_CTRL_CFG(cid);
+    CanCtrlStatus                    *ctrlData = GET_CTRL_DATA(cid);
+    Mhcl_Can_ControllerType          *hclCtrl = &mhcl_ctrl[cid];
 
     /* ---- Build HCL config from AUTOSAR post-build config ---- */
     Mhcl_Can_ConfigType hcl_cfg;
@@ -267,7 +256,7 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
     hcl_cfg.instance_id     = ctrlCfg->ControllerId;
 
     /* --- Nominal bit timing (from default baudrate entry) --- */
-    const Can_ControllerBaudrateCfgType *nomCfg =
+    const Mhal_Can_BaudrateCfgType *nomCfg =
         &ctrlCfg->BaudrateCfg[ctrlCfg->DefaultBaudrateIdx];
     hcl_cfg.brp                = nomCfg->Prescaler;
     hcl_cfg.nominal.prop_seg   = nomCfg->PropSeg;
@@ -278,7 +267,7 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
 
     /* --- FD data bit timing --- */
     if (ctrlCfg->CanControllerFdBaudrateConfig != NULL_PTR) {
-        const Can_ControllerFdBaudrateCfgType *fdCfg =
+        const Mhal_Can_FdBaudrateCfgType *fdCfg =
             ctrlCfg->CanControllerFdBaudrateConfig;
         hcl_cfg.data_fd.prop_seg   = fdCfg->CanControllerPropSeg;
         hcl_cfg.data_fd.phase_seg1 = fdCfg->CanControllerSeg1;
@@ -291,7 +280,7 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
     /* --- XL data bit timing --- */
     if ((ctrlCfg->XlEnable == TRUE) &&
         (ctrlCfg->CanControllerXlBaudrateConfig != NULL_PTR)) {
-        const Can_ControllerXlBaudrateCfgType *xlCfg =
+        const Mhal_Can_XlBaudrateCfgType *xlCfg =
             ctrlCfg->CanControllerXlBaudrateConfig;
         hcl_cfg.data_xl.prop_seg   = xlCfg->CanControllerXlPropSeg;
         hcl_cfg.data_xl.phase_seg1 = xlCfg->CanControllerXlSeg1;
@@ -323,10 +312,10 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
         for (hoh = pCanHalCfg->HwObjTxstartIdx;
              hoh < pCanHalCfg->HwObjCfgNum; hoh++) {
 
-            const Can_HardwareObjectType *hwObj =
+            const Mhal_Can_HardwareObjectType *hwObj =
                 &pCanHalCfg->CanHardwareObject[hoh];
             if (hwObj->CanControllerRef->ControllerId != cid) { continue; }
-            if (hwObj->CanObjectType != CAN_OBJECT_TYPE_TRANSMIT) { continue; }
+            if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_TRANSMIT) { continue; }
 
             uint8 fid = hwObj->HwFifoId;
             if (fid < MHCL_CAN_MAX_TX_FIFO) {
@@ -348,10 +337,10 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
         uint16 hoh;
         for (hoh = 0u; hoh < pCanHalCfg->HwObjTxstartIdx; hoh++) {
 
-            const Can_HardwareObjectType *hwObj =
+            const Mhal_Can_HardwareObjectType *hwObj =
                 &pCanHalCfg->CanHardwareObject[hoh];
             if (hwObj->CanControllerRef->ControllerId != cid) { continue; }
-            if (hwObj->CanObjectType != CAN_OBJECT_TYPE_RECEIVE) { continue; }
+            if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_RECEIVE) { continue; }
 
             uint8 fid = hwObj->HwFifoId;
             if (fid < MHCL_CAN_MAX_RX_FIFO) {
@@ -364,19 +353,17 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
         }
     }
 
-    /* --- RX filter config ---
-     * Build reference pairs from HW object filter configuration.
-     * If no filters are configured, default to accept-all. */
+    /* --- RX filter config --- */
     {
         static Mhcl_Can_RxFilterRefPairType ref_pairs_buf[MHCL_CAN_MAX_RX_FIFO * 8u];
         uint32 rp_count = 0u;
         uint16 hoh;
 
         for (hoh = 0u; hoh < pCanHalCfg->HwObjTxstartIdx; hoh++) {
-            const Can_HardwareObjectType *hwObj =
+            const Mhal_Can_HardwareObjectType *hwObj =
                 &pCanHalCfg->CanHardwareObject[hoh];
             if (hwObj->CanControllerRef->ControllerId != cid) { continue; }
-            if (hwObj->CanObjectType != CAN_OBJECT_TYPE_RECEIVE) { continue; }
+            if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_RECEIVE) { continue; }
             if (hwObj->CanHwFilter == NULL_PTR) { continue; }
 
             uint8 fi;
@@ -436,8 +423,6 @@ FUNC(void, CAN_CODE) can_hal_init(VAR(uint8, AUTOMATIC) cid)
 FUNC(void, CAN_CODE) can_hal_deinit(VAR(uint8, AUTOMATIC) cid)
 {
     CAN_DBG_INFO(DBG_HAL, "deinit cid=%u", cid);
-    if (pCanHalCfg == NULL_PTR)              { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
 
     (void)mhcl_can_deinit(&mhcl_ctrl[cid]);
 
@@ -455,8 +440,6 @@ can_hal_set_controller_mode(VAR(uint8, AUTOMATIC) cid,
                             VAR(Can_StateTransitionType, AUTOMATIC) Transition)
 {
     CAN_DBG_INFO(DBG_HAL, "set_mode cid=%u transition=%u", cid, Transition);
-    if (pCanHalCfg == NULL_PTR)              { return E_NOT_OK; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return E_NOT_OK; }
 
     CanCtrlStatus       *ctrlData = GET_CTRL_DATA(cid);
     Mhcl_Can_ReturnType  ret;
@@ -479,6 +462,8 @@ can_hal_set_controller_mode(VAR(uint8, AUTOMATIC) cid,
         CanIf_ControllerModeIndication(cid, CAN_CS_STOPPED);
         break;
 
+    case CAN_T_SLEEP:  /* XCAN does not support sleep mode */
+    case CAN_T_WAKEUP: /* XCAN does not support wakeup */
     default:
         return E_NOT_OK;
     }
@@ -491,10 +476,6 @@ can_hal_get_controller_mode(VAR(uint8, AUTOMATIC) cid,
                             P2VAR(Can_ControllerStateType, AUTOMATIC,
                                   CAN_APPL_DATA) ControllerModePtr)
 {
-    if (pCanHalCfg == NULL_PTR)              { return E_NOT_OK; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return E_NOT_OK; }
-    if (ControllerModePtr == NULL_PTR)       { return E_NOT_OK; }
-
     *ControllerModePtr = can_hd[cid].CtrlState;
     return E_OK;
 }
@@ -507,16 +488,11 @@ FUNC(Std_ReturnType, CAN_CODE)
 can_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
               P2CONST(Can_PduType, AUTOMATIC, CAN_APPL_DATA) PduInfo)
 {
-    if (pCanHalCfg == NULL_PTR)           { return E_NOT_OK; }
-    if (Hth >= pCanHalCfg->HwObjCfgNum)  { return E_NOT_OK; }
-    if (PduInfo == NULL_PTR)              { return E_NOT_OK; }
-    if (PduInfo->sdu == NULL_PTR)         { return E_NOT_OK; }
-
     CAN_DBG_VERB(DBG_HAL, "write Hth=%u id=0x%08X len=%u",
                  Hth, PduInfo->id, PduInfo->length);
 
-    const Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hth];
-    if (hwObj->CanObjectType != CAN_OBJECT_TYPE_TRANSMIT) { return E_NOT_OK; }
+    const Mhal_Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hth];
+    if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_TRANSMIT) { return E_NOT_OK; }
 
     uint8 cid = hwObj->CanControllerRef->ControllerId;
     if (can_hd[cid].CtrlState != CAN_CS_STARTED) { return E_NOT_OK; }
@@ -546,7 +522,7 @@ can_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
     msg.dlc = mhcl_can_bytes_to_dlc(ff, (uint32)PduInfo->length);
 
     if (ff == MHCL_CAN_FF_FD) {
-        const Can_ControllerType *ctrlCfg = hwObj->CanControllerRef;
+        const Mhal_Can_ControllerCfgType *ctrlCfg = hwObj->CanControllerRef;
         if ((ctrlCfg->CanControllerFdBaudrateConfig != NULL_PTR) &&
             (ctrlCfg->CanControllerFdBaudrateConfig
                  ->CanControllerTxBitRateSwitch == TRUE)) {
@@ -579,13 +555,9 @@ can_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
              P2VAR(Can_PduType, AUTOMATIC, CAN_APPL_DATA) PduInfo)
 {
     CAN_DBG_VERB(DBG_HAL, "read Hrh=%u", Hrh);
-    if (pCanHalCfg == NULL_PTR)           { return E_NOT_OK; }
-    if (Hrh >= pCanHalCfg->HwObjCfgNum)  { return E_NOT_OK; }
-    if (PduInfo == NULL_PTR)              { return E_NOT_OK; }
-    if (PduInfo->sdu == NULL_PTR)         { return E_NOT_OK; }
 
-    const Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hrh];
-    if (hwObj->CanObjectType != CAN_OBJECT_TYPE_RECEIVE) { return E_NOT_OK; }
+    const Mhal_Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hrh];
+    if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_RECEIVE) { return E_NOT_OK; }
 
     uint8 cid = hwObj->CanControllerRef->ControllerId;
     if (can_hd[cid].CtrlState != CAN_CS_STARTED) { return E_NOT_OK; }
@@ -621,8 +593,6 @@ FUNC(void, CAN_CODE)
 can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) cid)
 {
     CAN_DBG_INFO(DBG_HAL, "enable_irq cid=%u", cid);
-    if (pCanHalCfg == NULL_PTR)              { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
 
     CanCtrlStatus *ctrlData = GET_CTRL_DATA(cid);
 
@@ -631,7 +601,7 @@ can_hal_enable_controller_interrupts(VAR(uint8, AUTOMATIC) cid)
     }
 
     if (ctrlData->RefCounter == 0u) {
-        const Can_ControllerType *ctrlCfg = GET_CTRL_CFG(cid);
+        const Mhal_Can_ControllerCfgType *ctrlCfg = GET_CTRL_CFG(cid);
         mhcl_can_enable_interrupts(&mhcl_ctrl[cid],
                                    ctrlCfg->IrcFuncEnaMask,
                                    ctrlCfg->IrcErrEnaMask,
@@ -643,8 +613,6 @@ FUNC(void, CAN_CODE)
 can_hal_disable_controller_interrupts(VAR(uint8, AUTOMATIC) cid)
 {
     CAN_DBG_INFO(DBG_HAL, "disable_irq cid=%u", cid);
-    if (pCanHalCfg == NULL_PTR)              { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
 
     CanCtrlStatus *ctrlData = GET_CTRL_DATA(cid);
     ctrlData->RefCounter++;
@@ -663,10 +631,6 @@ can_hal_get_controller_error_state(VAR(uint8, AUTOMATIC) cid,
                                    P2VAR(Can_ErrorStateType, AUTOMATIC,
                                          CAN_APPL_DATA) ErrorStatePtr)
 {
-    if (pCanHalCfg == NULL_PTR)              { return E_NOT_OK; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return E_NOT_OK; }
-    if (ErrorStatePtr == NULL_PTR)           { return E_NOT_OK; }
-
     *ErrorStatePtr = hal_map_error_state(
         mhcl_can_get_error_state(&mhcl_ctrl[cid]));
     return E_OK;
@@ -675,9 +639,6 @@ can_hal_get_controller_error_state(VAR(uint8, AUTOMATIC) cid,
 FUNC(uint8, CAN_CODE)
 can_hal_get_rx_error_count(VAR(uint8, AUTOMATIC) cid)
 {
-    if (pCanHalCfg == NULL_PTR)              { return 0u; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return 0u; }
-
     uint32_t rec = mhcl_can_get_rec(&mhcl_ctrl[cid]);
     return (rec > 255u) ? 255u : (uint8)rec;
 }
@@ -685,9 +646,6 @@ can_hal_get_rx_error_count(VAR(uint8, AUTOMATIC) cid)
 FUNC(uint8, CAN_CODE)
 can_hal_get_tx_error_count(VAR(uint8, AUTOMATIC) cid)
 {
-    if (pCanHalCfg == NULL_PTR)              { return 0u; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return 0u; }
-
     uint32_t tec = mhcl_can_get_tec(&mhcl_ctrl[cid]);
     return (tec > 255u) ? 255u : (uint8)tec;
 }
@@ -701,13 +659,11 @@ can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
                      VAR(uint16, AUTOMATIC) arb_baudrate)
 {
     CAN_DBG_INFO(DBG_HAL, "set_baudrate cid=%u br_id=%u", cid, arb_baudrate);
-    if (pCanHalCfg == NULL_PTR)              { return E_NOT_OK; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return E_NOT_OK; }
     if (can_hd[cid].CtrlState != CAN_CS_STOPPED) { return E_NOT_OK; }
 
-    const Can_ControllerType *ctrlCfg = GET_CTRL_CFG(cid);
+    const Mhal_Can_ControllerCfgType *ctrlCfg = GET_CTRL_CFG(cid);
 
-    const Can_ControllerBaudrateCfgType *nomCfg = NULL_PTR;
+    const Mhal_Can_BaudrateCfgType *nomCfg = NULL_PTR;
     uint8 i;
     for (i = 0u; i < ctrlCfg->BaudrateCfgCount; i++) {
         if (ctrlCfg->BaudrateCfg[i].BaudRateConfigId == arb_baudrate) {
@@ -729,7 +685,7 @@ can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
     Mhcl_Can_BitTimingType  fd_bt;
     Mhcl_Can_BitTimingType *fd_bt_ptr = NULL;
     if (ctrlCfg->CanControllerFdBaudrateConfig != NULL_PTR) {
-        const Can_ControllerFdBaudrateCfgType *fdCfg =
+        const Mhal_Can_FdBaudrateCfgType *fdCfg =
             ctrlCfg->CanControllerFdBaudrateConfig;
         fd_bt.prop_seg   = fdCfg->CanControllerPropSeg;
         fd_bt.phase_seg1 = fdCfg->CanControllerSeg1;
@@ -744,7 +700,7 @@ can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
     Mhcl_Can_BitTimingType *xl_bt_ptr = NULL;
     if ((ctrlCfg->XlEnable == TRUE) &&
         (ctrlCfg->CanControllerXlBaudrateConfig != NULL_PTR)) {
-        const Can_ControllerXlBaudrateCfgType *xlCfg =
+        const Mhal_Can_XlBaudrateCfgType *xlCfg =
             ctrlCfg->CanControllerXlBaudrateConfig;
         xl_bt.prop_seg   = xlCfg->CanControllerXlPropSeg;
         xl_bt.phase_seg1 = xlCfg->CanControllerXlSeg1;
@@ -784,19 +740,17 @@ can_hal_set_baudrate(VAR(uint8, AUTOMATIC) cid,
 
 FUNC(void, CAN_CODE) can_hal_main_function_read(VAR(uint8, AUTOMATIC) cid)
 {
-    if (pCanHalCfg == NULL_PTR)              { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
     if (can_hd[cid].CtrlState != CAN_CS_STARTED) { return; }
 
     uint16 hoh;
     for (hoh = 0u; hoh < pCanHalCfg->HwObjTxstartIdx; hoh++) {
 
-        const Can_HardwareObjectType *hwObj =
+        const Mhal_Can_HardwareObjectType *hwObj =
             &pCanHalCfg->CanHardwareObject[hoh];
 
         if (hwObj->CanControllerRef->ControllerId != cid) { continue; }
-        if (hwObj->CanObjectType != CAN_OBJECT_TYPE_RECEIVE) { continue; }
-        if (hwObj->PollingMode != TRUE)                      { continue; }
+        if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_RECEIVE) { continue; }
+        if (hwObj->PollingMode != TRUE)                           { continue; }
 
         Mhcl_Can_MsgType msg;
         Can_PduType       pdu;
@@ -831,21 +785,19 @@ FUNC(void, CAN_CODE) can_hal_main_function_read(VAR(uint8, AUTOMATIC) cid)
 
 FUNC(void, CAN_CODE) can_hal_main_function_write(VAR(uint8, AUTOMATIC) cid)
 {
-    if (pCanHalCfg == NULL_PTR)              { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
     if (can_hd[cid].CtrlState != CAN_CS_STARTED) { return; }
-    if (can_hd[cid].HthObjBusy == 0u)       { return; }
+    if (can_hd[cid].HthObjBusy == 0u)            { return; }
 
     uint16 hoh;
     for (hoh = pCanHalCfg->HwObjTxstartIdx;
          hoh < pCanHalCfg->HwObjCfgNum; hoh++) {
 
-        const Can_HardwareObjectType *hwObj =
+        const Mhal_Can_HardwareObjectType *hwObj =
             &pCanHalCfg->CanHardwareObject[hoh];
 
         if (hwObj->CanControllerRef->ControllerId != cid) { continue; }
-        if (hwObj->CanObjectType != CAN_OBJECT_TYPE_TRANSMIT) { continue; }
-        if (hwObj->PollingMode != TRUE)                       { continue; }
+        if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_TRANSMIT) { continue; }
+        if (hwObj->PollingMode != TRUE)                            { continue; }
 
         uint8  hth_idx = hal_hth_local_idx((Can_HwHandleType)hoh);
         uint32 hth_bit = (uint32)1u << hth_idx;
@@ -862,8 +814,6 @@ FUNC(void, CAN_CODE) can_hal_main_function_write(VAR(uint8, AUTOMATIC) cid)
 
 FUNC(void, CAN_CODE) can_hal_main_function_busoff(VAR(uint8, AUTOMATIC) cid)
 {
-    if (pCanHalCfg == NULL_PTR)              { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
     if (can_hd[cid].CtrlState != CAN_CS_STARTED) { return; }
 
     Mhcl_Can_ErrorStateType err = mhcl_can_get_error_state(&mhcl_ctrl[cid]);
@@ -884,13 +834,9 @@ canxl_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
                 P2CONST(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo)
 {
     CAN_DBG_VERB(DBG_HAL, "xl_write Hth=%u", Hth);
-    if (pCanHalCfg == NULL_PTR)          { return E_NOT_OK; }
-    if (Hth >= pCanHalCfg->HwObjCfgNum) { return E_NOT_OK; }
-    if (PduInfo == NULL_PTR)             { return E_NOT_OK; }
-    if (PduInfo->sdu == NULL_PTR)        { return E_NOT_OK; }
 
-    const Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hth];
-    if (hwObj->CanObjectType != CAN_OBJECT_TYPE_TRANSMIT) { return E_NOT_OK; }
+    const Mhal_Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hth];
+    if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_TRANSMIT) { return E_NOT_OK; }
 
     uint8 cid = hwObj->CanControllerRef->ControllerId;
     if (can_hd[cid].CtrlState != CAN_CS_STARTED)         { return E_NOT_OK; }
@@ -900,23 +846,23 @@ canxl_hal_write(VAR(Can_HwHandleType, AUTOMATIC) Hth,
     uint32 hth_bit = (uint32)1u << hth_idx;
     if ((can_hd[cid].HthObjBusy & hth_bit) != 0u) { return CAN_BUSY_STD; }
 
-    /* Build HCL message for XL */
+    /* Build HCL message for XL — access XL params via XLParams pointer */
     Mhcl_Can_MsgType msg;
     (void)memset(&msg, 0, sizeof(msg));
 
     msg.direction    = MHCL_CAN_DIR_TX;
     msg.frame_format = MHCL_CAN_FF_XL;
     msg.id_type      = MHCL_CAN_ID_BASE;
-    msg.frame_id     = PduInfo->priorityId & STD_ID_MASK;
+    msg.frame_id     = PduInfo->XLParams->PriorityId & STD_ID_MASK;
 
     uint16 xl_len = PduInfo->length;
     if (xl_len > (uint16)MHCL_CAN_MAX_XL_PAYLOAD_BYTE) {
         xl_len = (uint16)MHCL_CAN_MAX_XL_PAYLOAD_BYTE;
     }
     msg.dlc  = (xl_len > 0u) ? (uint32_t)(xl_len - 1u) : 0u;
-    msg.vcid = PduInfo->vcid;
-    msg.sdt  = PduInfo->sdt;
-    msg.sec  = (PduInfo->sec == TRUE) ? 1u : 0u;
+    msg.vcid = PduInfo->XLParams->Vcid;
+    msg.sdt  = PduInfo->XLParams->SduType;
+    msg.sec  = (PduInfo->XLParams->Sec != 0u) ? 1u : 0u;
 
     hal_sdu_to_data_words(PduInfo->sdu, msg.data_word, (uint32)xl_len);
 
@@ -937,13 +883,9 @@ canxl_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
                P2VAR(CanXL_PduType, AUTOMATIC, CANXL_APPL_DATA) PduInfo)
 {
     CAN_DBG_VERB(DBG_HAL, "xl_read Hrh=%u", Hrh);
-    if (pCanHalCfg == NULL_PTR)           { return E_NOT_OK; }
-    if (Hrh >= pCanHalCfg->HwObjCfgNum)  { return E_NOT_OK; }
-    if (PduInfo == NULL_PTR)              { return E_NOT_OK; }
-    if (PduInfo->sdu == NULL_PTR)         { return E_NOT_OK; }
 
-    const Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hrh];
-    if (hwObj->CanObjectType != CAN_OBJECT_TYPE_RECEIVE) { return E_NOT_OK; }
+    const Mhal_Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hrh];
+    if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_RECEIVE) { return E_NOT_OK; }
 
     uint8 cid = hwObj->CanControllerRef->ControllerId;
     if (can_hd[cid].CtrlState != CAN_CS_STARTED) { return E_NOT_OK; }
@@ -962,11 +904,14 @@ canxl_hal_read(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
         data_bytes = (uint16)MHCL_CAN_MAX_XL_PAYLOAD_BYTE;
     }
 
-    PduInfo->priorityId  = msg.frame_id;
-    PduInfo->vcid        = (uint8)msg.vcid;
-    PduInfo->sdt         = (uint8)msg.sdt;
+    /* Populate XL-specific fields via XLParams pointer */
+    PduInfo->XLParams->PriorityId     = (uint16)msg.frame_id;
+    PduInfo->XLParams->Vcid           = (uint16)msg.vcid;
+    PduInfo->XLParams->SduType        = (uint8)msg.sdt;
+    PduInfo->XLParams->AcceptanceField = msg.af;
+    PduInfo->XLParams->Sec            = (msg.sec == 1u) ? 1u : 0u;
+
     PduInfo->length      = data_bytes;
-    PduInfo->sec         = (msg.sec == 1u) ? TRUE : FALSE;
     PduInfo->swPduHandle = 0u;
 
     hal_data_words_to_sdu(msg.data_word, PduInfo->sdu, (uint32)data_bytes);
@@ -984,16 +929,13 @@ can_hal_get_hth_fd_info(VAR(Can_HwHandleType, AUTOMATIC) Hth,
                         P2VAR(boolean, AUTOMATIC, CAN_APPL_DATA) Brs,
                         P2VAR(uint8, AUTOMATIC, CAN_APPL_DATA) PaddingValue)
 {
-    if (pCanHalCfg == NULL_PTR)          { return E_NOT_OK; }
-    if (Hth >= pCanHalCfg->HwObjCfgNum) { return E_NOT_OK; }
+    const Mhal_Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hth];
+    if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_TRANSMIT) { return E_NOT_OK; }
 
-    const Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hth];
-    if (hwObj->CanObjectType != CAN_OBJECT_TYPE_TRANSMIT) { return E_NOT_OK; }
-
-    *IsFd = (hwObj->CanObjectPayloadLength > CAN_PL_8) ? TRUE : FALSE;
+    *IsFd = (hwObj->CanObjectPayloadLength > MHAL_CAN_PL_8) ? TRUE : FALSE;
 
     if (*IsFd == TRUE) {
-        const Can_ControllerType *ctrlCfg = hwObj->CanControllerRef;
+        const Mhal_Can_ControllerCfgType *ctrlCfg = hwObj->CanControllerRef;
         *Brs = ((ctrlCfg->CanControllerFdBaudrateConfig != NULL_PTR) &&
                 (ctrlCfg->CanControllerFdBaudrateConfig
                      ->CanControllerTxBitRateSwitch == TRUE))
@@ -1008,14 +950,11 @@ can_hal_get_hth_fd_info(VAR(Can_HwHandleType, AUTOMATIC) Hth,
 
 FUNC(Std_ReturnType, CAN_CODE)
 can_hal_get_hrh_fd_info(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
-                        P2VAR(Can_ObjectPLType, AUTOMATIC, CAN_APPL_DATA)
+                        P2VAR(Mhal_Can_ObjectPLType, AUTOMATIC, CAN_APPL_DATA)
                             MaxPayload)
 {
-    if (pCanHalCfg == NULL_PTR)          { return E_NOT_OK; }
-    if (Hrh >= pCanHalCfg->HwObjCfgNum) { return E_NOT_OK; }
-
-    const Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hrh];
-    if (hwObj->CanObjectType != CAN_OBJECT_TYPE_RECEIVE) { return E_NOT_OK; }
+    const Mhal_Can_HardwareObjectType *hwObj = &pCanHalCfg->CanHardwareObject[Hrh];
+    if (hwObj->CanObjectType != MHAL_CAN_OBJECT_TYPE_RECEIVE) { return E_NOT_OK; }
 
     *MaxPayload = hwObj->CanObjectPayloadLength;
     return E_OK;
@@ -1028,8 +967,6 @@ can_hal_get_hrh_fd_info(VAR(Can_HwHandleType, AUTOMATIC) Hrh,
 FUNC(void, CAN_CODE) can_hal_irq_handler(VAR(uint8, AUTOMATIC) cid)
 {
     CAN_DBG_VERB(DBG_HAL, "irq_handler cid=%u", cid);
-    if (pCanHalCfg == NULL_PTR)              { return; }
-    if (cid >= pCanHalCfg->ControllerCfgNum) { return; }
 
     mhcl_can_process_irq_func(&mhcl_ctrl[cid]);
     mhcl_can_process_irq_err(&mhcl_ctrl[cid]);

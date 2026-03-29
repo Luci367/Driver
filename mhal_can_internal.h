@@ -27,14 +27,14 @@ typedef struct {
  *  HAL Configuration Count
  *****************************************************************************/
 
-#define CAN_CTRL_CONFIG_CNT CAN_CONTROLLER_CNT
+#define CAN_CTRL_CONFIG_CNT MHAL_CAN_CONTROLLER_CNT
 
 /******************************************************************************
  *  HAL State Variables (defined in mhal_can.c)
  *****************************************************************************/
 
 extern VAR(CanCtrlStatus, CAN_VAR) can_hd[CAN_CTRL_CONFIG_CNT];
-extern P2CONST(Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) pCanHalCfg;
+extern P2CONST(Mhal_Can_ConfigType, AUTOMATIC, CAN_APPL_CONST) pCanHalCfg;
 
 /******************************************************************************
  *  HAL State Access Macros
